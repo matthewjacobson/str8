@@ -132,10 +132,12 @@ DEPS_INCLUDE_DIR=/usr/local/include npm run build:wasm
 Two static demos live in `example/` — serve the repo root over HTTP (e.g.
 `npx serve` or `python3 -m http.server`) and open them:
 
-- `example/index.html` — a fixed star-with-hole, rendered to canvas.
+- `example/index.html` — a **gallery** with a dropdown of 28 sample polygons
+  (from [`LingDong-/interesting-polygon-archive`](https://github.com/LingDong-/interesting-polygon-archive)),
+  with pan, zoom, and live vertex/hole/face stats.
 - `example/geojson.html` — **paste your own GeoJSON** (`Polygon`,
   `MultiPolygon`, `Feature`, `FeatureCollection`, or a bare coordinates array)
-  and see its skeleton, with auto-fit bounds and a Y-flip toggle for
+  and see its skeleton, with pan/zoom and a Y-flip toggle for
   screen-coordinate data.
 
 Both import the built `dist/str8.js`, so run `npm run build` first.
