@@ -163,10 +163,11 @@ Static demos live in `example/` — serve the repo root over HTTP (e.g.
 - `example/offset.html` — **offsets & exterior skeletons**: inset/outset
   offset contours (with concentric stepping) and interior/exterior straight
   skeletons, driven by a distance slider, with pan/zoom.
-- `example/pathfind.html` — **central paths**: click two points and route a
+- `example/pathfind.html` — **central paths**: drag two points and route a
   path between them through the polygon's center along the skeleton, with a
-  direct↔central dial (clearance-bounded string-pulling) and clearance-safe
-  smoothing. Pure JS (`example/pathfind.js`) over the skeleton output.
+  direct↔central dial and smoothing. Like the region demo, this consumes the
+  [**str8-path**](https://github.com/matthewjacobson/str8-path) package
+  (`PathFinder`), loading str8 + JSTS from a CDN at runtime.
 - `example/region.html` — **region-to-region paths**: connect two draggable
   sub-regions inside a container, boundary-to-boundary through the container's
   central skeleton. This demo consumes the separate
