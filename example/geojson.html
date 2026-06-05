@@ -56,6 +56,17 @@
       }
       button.secondary { background: #21262d; border: 1px solid #30363d; }
       button:disabled { opacity: 0.5; cursor: default; }
+      select#sample {
+        background: #21262d;
+        color: #e6edf3;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        padding: 8px 10px;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+        max-width: 220px;
+      }
       #status { font-size: 13px; min-height: 20px; flex: none; }
       #status.err { color: #f85149; }
       #status.ok { color: #3fb950; }
@@ -134,7 +145,7 @@
         <textarea id="input" spellcheck="false"></textarea>
         <div class="row">
           <button id="run">Compute skeleton</button>
-          <button id="sample" class="secondary">Load sample ▸</button>
+          <select id="sample"><option value="">Load sample…</option></select>
           <label class="check"><input type="checkbox" id="invertY" /> flip Y (screen coords)</label>
         </div>
         <div id="status"></div>
@@ -423,14 +434,23 @@
       $('run').addEventListener('click', compute);
       $('invertY').addEventListener('change', compute);
 
-      // "Load sample" cycles through the bundled example polygons (shared with
-      // the gallery demo). Each is dropped into the textarea as a GeoJSON
-      // Polygon. Archive polygons use a y-down convention, so flip Y for them.
+      // The "Load sample" dropdown is populated from the bundled example
+      // polygons (shared with the gallery demo). Picking one drops it into the
+      // textarea as a GeoJSON Polygon. Archive polygons use a y-down
+      // convention, so flip Y for them.
+      const sampleSelect = $('sample');
       let samples = [];
-      let sampleIdx = 0;
       fetch('polygons.json')
         .then((r) => r.json())
-        .then((d) => { samples = d.polygons || []; })
+        .then((d) => {
+          samples = d.polygons || [];
+          for (const p of samples) {
+            const opt = document.createElement('option');
+            opt.value = p.id;
+            opt.textContent = p.label;
+            sampleSelect.appendChild(opt);
+          }
+        })
         .catch(() => {});
 
       // Compact GeoJSON text: one ring per line, points inline (readable for
@@ -442,17 +462,13 @@
         return `{\n  "type": "Polygon",\n  "coordinates": [\n${body}\n  ]\n}`;
       }
 
-      $('sample').addEventListener('click', () => {
-        if (!samples.length) {
-          input.value = JSON.stringify(SAMPLE, null, 2);
-          compute();
-          return;
-        }
-        const p = samples[sampleIdx % samples.length];
-        sampleIdx++;
+      sampleSelect.addEventListener('change', () => {
+        const p = samples.find((s) => s.id === sampleSelect.value);
+        if (!p) return;
         input.value = toGeoJSONText(p.rings);
         $('invertY').checked = !p.builtin; // archive polygons are y-down
         compute();
+        sampleSelect.value = ''; // reset to placeholder so re-picking re-loads
       });
 
       // Keep the canvas sized to its container. Refit only if the user hasn't
