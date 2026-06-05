@@ -71,8 +71,9 @@
 
     <div class="toolbar">
       <label class="field">Polygon <select id="picker"></select></label>
-      <label class="field">Direct ↔ Central <input type="range" id="alpha" min="0" max="160" step="1" value="25" /></label>
-      <label class="check"><input type="checkbox" id="vis" checked /> keep connectors inside</label>
+      <label class="field">Direct ↔ Central <input type="range" id="alpha" min="0" max="100" step="1" value="40" /></label>
+      <label class="check"><input type="checkbox" id="smooth" checked /> smooth</label>
+      <label class="check"><input type="checkbox" id="vis" checked /> keep inside</label>
       <button class="btn" id="reset">Reset points</button>
       <span id="info"></span>
       <span class="spacer"></span>
@@ -93,7 +94,7 @@
 
     <script type="module">
       import { init, buildFromPolygon } from '../dist/str8.js';
-      import { findCentralPath, buildSkeletonGraph, pathStats, clampInside, pointInPolygon } from './pathfind.js';
+      import { findCentralPath, buildSkeletonGraph, stringPull, smoothPath, pathStats, clampInside, pointInPolygon } from './pathfind.js';
 
       const $ = (id) => document.getElementById(id);
       const canvas = $('c');
@@ -126,7 +127,7 @@
       }
 
       // ---- state ----------------------------------------------------------
-      let polygons = [], rings = null, skel = null, graph = null, bounds = null;
+      let polygons = [], rings = null, skel = null, graph = null, bounds = null, maxClr = 1;
       let A = null, B = null, path = null;
 
       function computeBounds() {
@@ -148,14 +149,21 @@
       }
 
       function recompute() {
-        const alpha = parseInt($('alpha').value) / 10;
+        const t = parseInt($('alpha').value) / 100; // 0 (direct) .. 1 (central)
         const visibility = $('vis').checked;
-        path = A && B ? findCentralPath(skel, rings, A, B, { alpha, visibility }) : null;
+        let p = A && B ? findCentralPath(skel, rings, A, B, { alpha: t * 16, visibility }) : null;
+        if (p) {
+          // Slider also sets the string-pull clearance bound: 0 = pull taut
+          // (direct), high = keep the path fat and central.
+          p = stringPull(p, rings, { minClearance: t * 0.5 * maxClr });
+          if ($('smooth').checked) p = smoothPath(p, rings, {});
+        }
+        path = p;
         draw();
         if (!A || !B) { info.innerHTML = 'click in the polygon to place point A'; return; }
         if (!path) { info.innerHTML = 'no path found'; return; }
         const s = pathStats(path);
-        info.innerHTML = `length <b>${s.length.toFixed(0)}</b> · mean clearance <b>${s.meanClearance.toFixed(1)}</b> · α <b>${alpha.toFixed(1)}</b>`;
+        info.innerHTML = `length <b>${s.length.toFixed(0)}</b> · mean clearance <b>${s.meanClearance.toFixed(1)}</b>`;
       }
 
       function loadPolygon(id) {
@@ -163,6 +171,7 @@
         rings = p.rings;
         skel = buildFromPolygon(rings);
         graph = buildSkeletonGraph(skel);
+        maxClr = Math.max(1e-9, ...graph.nodes.map((n) => n.t));
         computeBounds();
         defaultPoints();
         viewDirty = false; fitView();
@@ -295,6 +304,7 @@
 
       $('picker').addEventListener('change', () => loadPolygon($('picker').value));
       $('alpha').addEventListener('input', recompute);
+      $('smooth').addEventListener('change', recompute);
       $('vis').addEventListener('change', recompute);
       $('reset').addEventListener('click', () => { defaultPoints(); recompute(); });
 

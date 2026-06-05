@@ -165,7 +165,8 @@ Static demos live in `example/` — serve the repo root over HTTP (e.g.
   skeletons, driven by a distance slider, with pan/zoom.
 - `example/pathfind.html` — **central paths**: click two points and route a
   path between them through the polygon's center along the skeleton, with a
-  direct↔central dial. Pure JS (`example/pathfind.js`) over the skeleton output.
+  direct↔central dial (clearance-bounded string-pulling) and clearance-safe
+  smoothing. Pure JS (`example/pathfind.js`) over the skeleton output.
 
 They import the built `dist/str8.js`, so run `npm run build` first.
 

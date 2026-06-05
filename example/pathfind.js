@@ -201,6 +201,106 @@ export function findCentralPath(skel, rings, A, B, { alpha = 1, visibility = tru
   return path ? path.map((i) => ({ x: nodes[i].x, y: nodes[i].y, t: nodes[i].t })) : null;
 }
 
+// --- refinement: string-pull + smoothing ----------------------------------
+
+function pointSegDist(px, py, ax, ay, bx, by) {
+  const vx = bx - ax, vy = by - ay;
+  const L2 = vx * vx + vy * vy || 1e-12;
+  let t = ((px - ax) * vx + (py - ay) * vy) / L2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * vx), py - (ay + t * vy));
+}
+
+/** Clearance at an arbitrary point: distance to the nearest polygon edge. */
+export function clearanceAt(rings, x, y) {
+  let m = Infinity;
+  for (const ring of rings) {
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const d = pointSegDist(x, y, ring[j][0], ring[j][1], ring[i][0], ring[i][1]);
+      if (d < m) m = d;
+    }
+  }
+  return m;
+}
+
+// Can we replace a run of the path with the straight segment p→q? It must stay
+// inside the polygon and keep clearance ≥ minClearance the whole way.
+function shortcutOK(rings, p, q, minClearance) {
+  if (!segmentInside(rings, p, q)) return false;
+  if (minClearance <= 0) return true;
+  const len = dist2d(p.x, p.y, q.x, q.y);
+  const steps = Math.max(8, Math.ceil(len / (minClearance * 0.5)));
+  for (let s = 0; s <= steps; s++) {
+    const u = s / steps;
+    if (clearanceAt(rings, p.x + (q.x - p.x) * u, p.y + (q.y - p.y) * u) < minClearance) return false;
+  }
+  return true;
+}
+
+/**
+ * Clearance-bounded string-pulling: greedily replace sub-runs of the path with
+ * straight shortcuts, as long as they stay inside and keep clearance ≥
+ * minClearance. `minClearance = 0` pulls the path taut (toward the direct,
+ * wall-hugging route); larger values keep it fat and central. Also removes the
+ * skeleton's jaggedness.
+ */
+export function stringPull(path, rings, { minClearance = 0 } = {}) {
+  if (!path || path.length <= 2) return path;
+  const out = [path[0]];
+  let i = 0;
+  while (i < path.length - 1) {
+    let j = path.length - 1;
+    for (; j > i + 1; j--) if (shortcutOK(rings, path[i], path[j], minClearance)) break;
+    // j === i+1 is always taken as a fallback (it's a sub-segment of the input).
+    out.push(path[j]);
+    i = j;
+  }
+  return out.map((p) => ({ x: p.x, y: p.y, t: clearanceAt(rings, p.x, p.y) }));
+}
+
+/**
+ * Corner-rounding smoothing that respects walls: a corner is only rounded if
+ * the rounded points (and the chord between them) keep clearance ≥
+ * minClearance. Corners pressed against a wall (e.g. a taut path hugging a
+ * reflex vertex) are left sharp, so the curve never bulges outside. Endpoints
+ * are preserved.
+ *
+ * `minClearance` defaults to a small fraction of the path's own clearance so it
+ * scales with the polygon; pass an explicit value to override.
+ */
+export function smoothPath(path, rings, { iterations = 2, minClearance } = {}) {
+  if (!path || path.length < 3) return path;
+  if (minClearance == null) {
+    const maxT = Math.max(1e-9, ...path.map((p) => p.t || 0));
+    minClearance = 0.05 * maxT;
+  }
+  const ok = (p) => clearanceAt(rings, p.x, p.y) >= minClearance;
+
+  let pts = path.map((p) => ({ x: p.x, y: p.y }));
+  for (let it = 0; it < iterations; it++) {
+    if (pts.length < 3) break;
+    const out = [pts[0]];
+    for (let i = 1; i < pts.length - 1; i++) {
+      const a = pts[i - 1], v = pts[i], b = pts[i + 1];
+      // Round the corner at v toward its neighbours (keeps the curve near v).
+      const q = { x: v.x * 0.75 + a.x * 0.25, y: v.y * 0.75 + a.y * 0.25 };
+      const r = { x: v.x * 0.75 + b.x * 0.25, y: v.y * 0.75 + b.y * 0.25 };
+      const mid = { x: (q.x + r.x) / 2, y: (q.y + r.y) / 2 };
+      const last = out[out.length - 1];
+      // Round only if the rounded points clear the walls AND the new segments
+      // stay inside; otherwise keep the corner sharp (it's hugging a wall).
+      if (ok(q) && ok(r) && ok(mid) && segmentInside(rings, last, q) && segmentInside(rings, q, r)) {
+        out.push(q, r);
+      } else {
+        out.push(v);
+      }
+    }
+    out.push(pts[pts.length - 1]);
+    pts = out;
+  }
+  return pts.map((p) => ({ x: p.x, y: p.y, t: clearanceAt(rings, p.x, p.y) }));
+}
+
 /** Quick metrics for judging a path: total length and clearance stats. */
 export function pathStats(path) {
   let length = 0;
