@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>str8 — region-to-region paths</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0; font: 14px/1.5 system-ui, sans-serif;
+        background: #0e1116; color: #e6edf3;
+        display: flex; flex-direction: column; overflow: hidden;
+      }
+      header { padding: 14px 20px; border-bottom: 1px solid #30363d; flex: none; }
+      h1 { font-size: 16px; margin: 0; }
+      header p { margin: 4px 0 0; color: #8b949e; font-size: 13px; }
+      .toolbar {
+        flex: none; display: flex; align-items: center; gap: 18px;
+        padding: 12px 20px; border-bottom: 1px solid #30363d; flex-wrap: wrap;
+      }
+      label.field { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #8b949e; }
+      select { background: #161b22; color: #e6edf3; border: 1px solid #30363d; border-radius: 6px; padding: 7px 10px; font: inherit; }
+      input[type='range'] { width: 140px; accent-color: #58a6ff; }
+      .check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #8b949e; user-select: none; }
+      #info { font-size: 13px; color: #8b949e; }
+      #info.err { color: #f85149; }
+      #info b { color: #e6edf3; font-weight: 600; }
+      .spacer { flex: 1; }
+      button { background: rgba(22,27,34,0.9); border: 1px solid #30363d; color: #e6edf3; border-radius: 6px; cursor: pointer; }
+      .zoom-btn { width: 34px; height: 34px; padding: 0; font-size: 18px; line-height: 1; }
+      .canvas-wrap { position: relative; flex: 1; min-height: 0; background: #0e1116; }
+      canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+      canvas.grabbing { cursor: grabbing; }
+      .overlay { position: absolute; display: flex; }
+      .hint { top: 10px; right: 12px; color: #6e7681; font-size: 12px; background: rgba(13,17,23,0.72); border: 1px solid #30363d; border-radius: 6px; padding: 4px 8px; pointer-events: none; }
+      .legend { right: 12px; bottom: 12px; gap: 14px; align-items: center; background: rgba(13,17,23,0.72); border: 1px solid #30363d; border-radius: 6px; padding: 6px 10px; color: #8b949e; font-size: 12px; }
+      .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: middle; }
+      @media (max-width: 820px) { body { overflow: auto; } .canvas-wrap { height: 62vh; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>str8 — central paths between regions</h1>
+      <p>Two regions inside a container, connected boundary-to-boundary through the container's straight skeleton. Drag the regions.</p>
+    </header>
+
+    <div class="toolbar">
+      <label class="field">Container <select id="container"></select></label>
+      <label class="field">Direct ↔ Central <input type="range" id="alpha" min="0" max="100" step="1" value="40" /></label>
+      <label class="field">Region size <input type="range" id="size" min="5" max="16" step="1" value="9" /></label>
+      <label class="check"><input type="checkbox" id="smooth" checked /> smooth</label>
+      <span id="info"></span>
+      <span class="spacer"></span>
+      <button class="zoom-btn" id="fit" title="Fit">⤢</button>
+      <button class="zoom-btn" id="zin" title="Zoom in">+</button>
+      <button class="zoom-btn" id="zout" title="Zoom out">−</button>
+    </div>
+
+    <div class="canvas-wrap" id="wrap">
+      <canvas id="c"></canvas>
+      <div class="overlay hint">drag a region to move it · drag empty space to pan · scroll to zoom</div>
+      <div class="overlay legend">
+        <span><span class="swatch" style="background:#58a6ff;height:3px"></span> container</span>
+        <span><span class="swatch" style="background:#3fb950"></span> region A</span>
+        <span><span class="swatch" style="background:#f0883e"></span> region B</span>
+        <span><span class="swatch" style="background:#e6edf3;height:3px"></span> path</span>
+      </div>
+    </div>
+
+    <script type="module">
+      import { init, buildFromPolygon } from '../dist/str8.js';
+      import { findRegionPath, buildSkeletonGraph, stringPull, smoothPath, pathStats, pointInPolygon } from './pathfind.js';
+
+      const $ = (id) => document.getElementById(id);
+      const canvas = $('c');
+      const ctx = canvas.getContext('2d');
+      const info = $('info');
+      const setInfo = (h, err) => { info.innerHTML = h; info.className = err ? 'err' : ''; };
+
+      // Built-in containers (good open interiors), then archive polygons.
+      const BUILTIN = {
+        'L-shape': [[[0, 0], [300, 0], [300, 120], [120, 120], [120, 300], [0, 300]]],
+        Rectangle: [[[0, 0], [360, 0], [360, 220], [0, 220]]],
+        Plus: [[[100, 0], [200, 0], [200, 100], [300, 100], [300, 200], [200, 200], [200, 300], [100, 300], [100, 200], [0, 200], [0, 100], [100, 100]]],
+        'U-shape': [[[0, 0], [80, 0], [80, 220], [220, 220], [220, 0], [300, 0], [300, 300], [0, 300]]],
+      };
+
+      // ---- camera ---------------------------------------------------------
+      const cam = { scale: 1, ox: 0, oy: 0 };
+      let dpr = 1, viewDirty = false;
+      const sx = (x) => cam.ox + x * cam.scale, sy = (y) => cam.oy + y * cam.scale;
+      const wx = (px) => (px - cam.ox) / cam.scale, wy = (py) => (py - cam.oy) / cam.scale;
+      function sizeCanvas() {
+        dpr = window.devicePixelRatio || 1;
+        const w = Math.max(1, Math.round(canvas.clientWidth * dpr)), h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+        if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+      }
+      function fitView() {
+        if (!bounds) return;
+        const W = canvas.clientWidth, H = canvas.clientHeight, pad = 50;
+        const spanX = bounds.maxX - bounds.minX || 1, spanY = bounds.maxY - bounds.minY || 1;
+        cam.scale = Math.min((W - pad * 2) / spanX, (H - pad * 2) / spanY);
+        const cx = (bounds.minX + bounds.maxX) / 2, cy = (bounds.minY + bounds.maxY) / 2;
+        cam.ox = W / 2 - cx * cam.scale; cam.oy = H / 2 - cy * cam.scale; viewDirty = false;
+      }
+
+      // ---- state ----------------------------------------------------------
+      let container = null, skel = null, graph = null, bounds = null, maxClr = 1, cCentroid = null;
+      let A = null, B = null, half = 11, path = null;
+
+      const squareRing = (c) => [[c.cx - half, c.cy - half], [c.cx + half, c.cy - half], [c.cx + half, c.cy + half], [c.cx - half, c.cy + half]];
+      const squareFits = (cx, cy) =>
+        pointInPolygon(container, cx, cy) &&
+        squareRing({ cx, cy }).every(([x, y]) => pointInPolygon(container, x, y));
+
+      // Nudge a center toward the container centroid until the square fits.
+      function validCenter(cx, cy) {
+        if (squareFits(cx, cy)) return { cx, cy };
+        for (let s = 0.05; s <= 1.0001; s += 0.05) {
+          const x = cx + (cCentroid.x - cx) * s, y = cy + (cCentroid.y - cy) * s;
+          if (squareFits(x, y)) return { cx: x, cy: y };
+        }
+        return null;
+      }
+
+      function computeBounds() {
+        let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+        for (const ring of container) for (const [x, y] of ring) { a = Math.min(a, x); b = Math.min(b, y); c = Math.max(c, x); d = Math.max(d, y); }
+        bounds = { minX: a, minY: b, maxX: c, maxY: d };
+        const o = container[0]; let cx = 0, cy = 0; for (const [x, y] of o) { cx += x; cy += y; }
+        cCentroid = { x: cx / o.length, y: cy / o.length };
+      }
+
+      // Grid-search fitting centers; place A and B at the farthest-apart pair.
+      // Shrink the region if it's too big to fit two copies in this container.
+      function placeRegions() {
+        const N = 14;
+        for (let attempt = 0; attempt < 6; attempt++) {
+          const fit = [];
+          for (let i = 0; i <= N; i++) for (let j = 0; j <= N; j++) {
+            const cx = bounds.minX + (bounds.maxX - bounds.minX) * (i / N);
+            const cy = bounds.minY + (bounds.maxY - bounds.minY) * (j / N);
+            if (squareFits(cx, cy)) fit.push({ cx, cy });
+          }
+          let best = null;
+          for (let i = 0; i < fit.length; i++) for (let j = i + 1; j < fit.length; j++) {
+            const dd = Math.hypot(fit[i].cx - fit[j].cx, fit[i].cy - fit[j].cy);
+            if (!best || dd > best.dd) best = { dd, a: fit[i], b: fit[j] };
+          }
+          if (best && best.dd > half * 2.2) { A = { ...best.a }; B = { ...best.b }; return; }
+          half *= 0.75; // too big to separate two regions — shrink and retry
+        }
+        A = { cx: cCentroid.x, cy: cCentroid.y }; B = { ...A };
+      }
+
+      function loadContainer(key) {
+        container = BUILTIN[key] || polygons.find((p) => p.id === key).rings;
+        skel = buildFromPolygon(container);
+        graph = buildSkeletonGraph(skel);
+        maxClr = Math.max(1e-9, ...graph.nodes.map((n) => n.t));
+        computeBounds();
+        half = +$('size').value / 100 * Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+        placeRegions();
+        viewDirty = false; fitView();
+        recompute();
+      }
+
+      function recompute() {
+        const t = +$('alpha').value / 100;
+        let raw = findRegionPath(skel, container, [squareRing(A)], [squareRing(B)], { alpha: t * 16 });
+        if (raw) { raw = stringPull(raw, container, { minClearance: t * 0.4 * maxClr }); if ($('smooth').checked) raw = smoothPath(raw, container, {}); }
+        path = raw; draw();
+        if (!path) { setInfo('no path (regions overlap or outside)', true); return; }
+        const s = pathStats(path);
+        setInfo(`length <b>${s.length.toFixed(0)}</b> · mean clearance <b>${s.meanClearance.toFixed(1)}</b>`);
+      }
+
+      // ---- draw -----------------------------------------------------------
+      function poly(rings, stroke, fill) {
+        for (const r of rings) {
+          ctx.beginPath();
+          r.forEach(([x, y], k) => { const px = sx(x), py = sy(y); k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py); });
+          ctx.closePath();
+          if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+          ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke();
+        }
+      }
+      function draw() {
+        sizeCanvas();
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+        if (!container) return;
+
+        ctx.strokeStyle = '#2b313a'; ctx.lineWidth = 1;
+        for (const e of graph.edges) { ctx.beginPath(); ctx.moveTo(sx(graph.nodes[e.a].x), sy(graph.nodes[e.a].y)); ctx.lineTo(sx(graph.nodes[e.b].x), sy(graph.nodes[e.b].y)); ctx.stroke(); }
+
+        poly(container, '#58a6ff', null);
+        poly([squareRing(A)], '#3fb950', 'rgba(63,185,80,0.18)');
+        poly([squareRing(B)], '#f0883e', 'rgba(240,136,62,0.18)');
+
+        if (path && path.length > 1) {
+          ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+          for (const [w, col] of [[7, 'rgba(255,255,255,0.14)'], [3.5, '#e6edf3']]) {
+            ctx.strokeStyle = col; ctx.lineWidth = w; ctx.beginPath();
+            path.forEach((p, k) => { const px = sx(p.x), py = sy(p.y); k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py); });
+            ctx.stroke();
+          }
+          for (const p of [path[0], path[path.length - 1]]) { ctx.fillStyle = '#ffd33d'; ctx.beginPath(); ctx.arc(sx(p.x), sy(p.y), 4, 0, Math.PI * 2); ctx.fill(); }
+        }
+      }
+
+      // ---- boot -----------------------------------------------------------
+      let polygons = [];
+      Promise.all([init(), fetch('polygons.json').then((r) => r.json())]).then(([, data]) => {
+        polygons = data.polygons.filter((p) => !p.builtin);
+        const sel = $('container');
+        for (const k of Object.keys(BUILTIN)) { const o = document.createElement('option'); o.value = k; o.textContent = k; sel.appendChild(o); }
+        for (const p of polygons) { const o = document.createElement('option'); o.value = p.id; o.textContent = p.label; sel.appendChild(o); }
+        sel.value = 'L-shape';
+        loadContainer('L-shape');
+      }).catch((e) => setInfo(`failed to load: ${e.message}`, true));
+
+      // ---- interaction ----------------------------------------------------
+      function pos(e) { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+      const inSquare = (c, x, y) => Math.abs(x - c.cx) <= half && Math.abs(y - c.cy) <= half;
+
+      let drag = null, dragOff = null, lastX = 0, lastY = 0;
+      canvas.addEventListener('pointerdown', (e) => {
+        canvas.setPointerCapture(e.pointerId);
+        const p = pos(e), gx = wx(p.x), gy = wy(p.y);
+        if (A && inSquare(A, gx, gy)) { drag = 'A'; dragOff = { x: A.cx - gx, y: A.cy - gy }; }
+        else if (B && inSquare(B, gx, gy)) { drag = 'B'; dragOff = { x: B.cx - gx, y: B.cy - gy }; }
+        else { drag = 'view'; canvas.classList.add('grabbing'); lastX = e.clientX; lastY = e.clientY; }
+      });
+      canvas.addEventListener('pointermove', (e) => {
+        if (!drag) return;
+        if (drag === 'view') { cam.ox += e.clientX - lastX; cam.oy += e.clientY - lastY; lastX = e.clientX; lastY = e.clientY; viewDirty = true; draw(); return; }
+        const p = pos(e);
+        const cand = validCenter(wx(p.x) + dragOff.x, wy(p.y) + dragOff.y);
+        if (cand) { if (drag === 'A') A = cand; else B = cand; recompute(); }
+      });
+      const endDrag = () => { if (drag === 'view') canvas.classList.remove('grabbing'); drag = null; };
+      canvas.addEventListener('pointerup', endDrag);
+      canvas.addEventListener('pointercancel', endDrag);
+
+      function zoomAt(mx, my, f) { const gx = wx(mx), gy = wy(my); cam.scale *= f; cam.ox = mx - gx * cam.scale; cam.oy = my - gy * cam.scale; viewDirty = true; draw(); }
+      canvas.addEventListener('wheel', (e) => { e.preventDefault(); const p = pos(e); zoomAt(p.x, p.y, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
+      canvas.addEventListener('dblclick', () => { viewDirty = false; fitView(); draw(); });
+      const centerZoom = (f) => zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, f);
+      $('zin').addEventListener('click', () => centerZoom(1.25));
+      $('zout').addEventListener('click', () => centerZoom(1 / 1.25));
+      $('fit').addEventListener('click', () => { viewDirty = false; fitView(); draw(); });
+
+      $('container').addEventListener('change', () => loadContainer($('container').value));
+      $('alpha').addEventListener('input', recompute);
+      $('smooth').addEventListener('change', recompute);
+      $('size').addEventListener('input', () => {
+        half = +$('size').value / 100 * Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+        const va = validCenter(A.cx, A.cy), vb = validCenter(B.cx, B.cy);
+        if (va) A = va; if (vb) B = vb;
+        recompute();
+      });
+
+      new ResizeObserver(() => { sizeCanvas(); if (!viewDirty) fitView(); draw(); }).observe($('wrap'));
+    </script>
+  </body>
+</html>

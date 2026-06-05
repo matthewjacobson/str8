@@ -355,7 +355,19 @@ export function smoothPath(path, rings, { iterations = 2, minClearance } = {}) {
  * @param rings  the container polygon (outer ring first, then holes).
  * @param regionA,regionB  sub-polygons (each `[ring, ...]`) inside the container.
  */
+/** How much of a region's outer ring lies inside the container. */
+export function regionInsideFraction(rings, region) {
+  const ring = region[0];
+  let inside = 0;
+  for (const [x, y] of ring) if (pointInPolygon(rings, x, y)) inside++;
+  return inside / ring.length;
+}
+
 export function findRegionPath(skel, rings, regionA, regionB, { alpha = 1, visibility = true } = {}) {
+  // Both regions must overlap the container; a region entirely outside has no
+  // meaningful boundary-to-boundary connection.
+  if (regionInsideFraction(rings, regionA) === 0 || regionInsideFraction(rings, regionB) === 0) return null;
+
   const { nodes, edges } = buildSkeletonGraph(skel);
   if (edges.length === 0) return null;
 
@@ -444,14 +456,17 @@ export function findRegionPath(skel, rings, regionA, regionB, { alpha = 1, visib
     return { x: x / r.length, y: y / r.length };
   };
 
-  const cA = centroid(regionA), cB = centroid(regionB);
+  // Clamp the centroid hints inside (in case a region straddles the boundary).
+  const cA = clampInside(rings, centroid(regionA));
+  const cB = clampInside(rings, centroid(regionB));
 
   // Super-source over A's boundary, super-sink over B's. The 0-cost links make
-  // the path's true endpoints the chosen boundary points.
+  // the path's true endpoints the chosen boundary points. Samples that fall
+  // outside the container (a straddling region) are clamped just inside.
   const S = nodes.length; nodes.push({ x: cA.x, y: cA.y, t: 0 }); adj.push([]);
-  for (const p of samples(regionA)) { const pid = attach(p, cB); if (pid != null) link(S, pid, 0); }
+  for (const p of samples(regionA)) { const pid = attach(clampInside(rings, p), cB); if (pid != null) link(S, pid, 0); }
   const T = nodes.length; nodes.push({ x: cB.x, y: cB.y, t: 0 }); adj.push([]);
-  for (const p of samples(regionB)) { const pid = attach(p, cA); if (pid != null) link(pid, T, 0); }
+  for (const p of samples(regionB)) { const pid = attach(clampInside(rings, p), cA); if (pid != null) link(pid, T, 0); }
 
   const idxPath = dijkstra(adj, S, T);
   if (!idxPath) return null;

@@ -167,6 +167,9 @@ Static demos live in `example/` — serve the repo root over HTTP (e.g.
   path between them through the polygon's center along the skeleton, with a
   direct↔central dial (clearance-bounded string-pulling) and clearance-safe
   smoothing. Pure JS (`example/pathfind.js`) over the skeleton output.
+- `example/region.html` — **region-to-region paths**: connect two draggable
+  sub-regions inside a container, boundary-to-boundary through the container's
+  central skeleton (multi-source/sink over each region's boundary).
 
 They import the built `dist/str8.js`, so run `npm run build` first.
 
