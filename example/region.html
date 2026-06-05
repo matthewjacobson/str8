@@ -41,13 +41,13 @@
       @media (max-width: 820px) { body { overflow: auto; } .canvas-wrap { height: 60vh; } }
     </style>
 
-    <!-- This demo consumes the separate str8-path package (pinned commit on
-         jsDelivr), which itself depends on str8 + jsts. We point @matthewjacobson/str8
-         at this repo's own local build. -->
+    <!-- This demo consumes the separate, published str8-path package (from the
+         npm CDN), which itself depends on str8 + jsts. We point
+         @matthewjacobson/str8 at this repo's own local build. -->
     <script type="importmap">
       {
         "imports": {
-          "str8-path": "https://cdn.jsdelivr.net/gh/matthewjacobson/str8-path@b08536a3ab6e6b2c91b06df05e6d85018feec678/src/index.js",
+          "str8-path": "https://cdn.jsdelivr.net/npm/str8-path@0.1.0/src/index.js",
           "@matthewjacobson/str8": "../dist/str8.js",
           "jsts/dist/jsts.min.js": "https://unpkg.com/jsts@2.12.1/dist/jsts.min.js"
         }
