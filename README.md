@@ -15,7 +15,7 @@ the set of edges traced by the polygon's edges as they move inward at constant
 speed. Each skeleton vertex carries a `time` value — the distance the wavefront
 travelled to reach it — which doubles as a roof height.
 
-**[▶ Live demos](https://matthewjacobson.github.io/str8/)** — an index linking both example apps: a gallery of sample polygons and a paste-your-own-GeoJSON tool.
+**[▶ Live demos](https://matthewjacobson.github.io/str8/)**
 
 ## Install
 
