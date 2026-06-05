@@ -71,7 +71,7 @@
 
     <script type="module">
       import { init, buildFromPolygon } from '../dist/str8.js';
-      import { findRegionPath, buildSkeletonGraph, stringPull, smoothPath, pathStats, pointInPolygon } from './pathfind.js';
+      import { findRegionPath, buildSkeletonGraph, stringPull, smoothPath, pathStats, pointInPolygon, regionInsideFraction } from './pathfind.js';
 
       const $ = (id) => document.getElementById(id);
       const canvas = $('c');
@@ -114,16 +114,6 @@
       const squareFits = (cx, cy) =>
         pointInPolygon(container, cx, cy) &&
         squareRing({ cx, cy }).every(([x, y]) => pointInPolygon(container, x, y));
-
-      // Nudge a center toward the container centroid until the square fits.
-      function validCenter(cx, cy) {
-        if (squareFits(cx, cy)) return { cx, cy };
-        for (let s = 0.05; s <= 1.0001; s += 0.05) {
-          const x = cx + (cCentroid.x - cx) * s, y = cy + (cCentroid.y - cy) * s;
-          if (squareFits(x, y)) return { cx: x, cy: y };
-        }
-        return null;
-      }
 
       function computeBounds() {
         let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
@@ -172,9 +162,13 @@
         let raw = findRegionPath(skel, container, [squareRing(A)], [squareRing(B)], { alpha: t * 16 });
         if (raw) { raw = stringPull(raw, container, { minClearance: t * 0.4 * maxClr }); if ($('smooth').checked) raw = smoothPath(raw, container, {}); }
         path = raw; draw();
-        if (!path) { setInfo('no path (regions overlap or outside)', true); return; }
+        if (!path) { setInfo('no path found', true); return; }
         const s = pathStats(path);
-        setInfo(`length <b>${s.length.toFixed(0)}</b> · mean clearance <b>${s.meanClearance.toFixed(1)}</b>`);
+        const out = [];
+        if (regionInsideFraction(container, [squareRing(A)]) === 0) out.push('A');
+        if (regionInsideFraction(container, [squareRing(B)]) === 0) out.push('B');
+        const note = out.length ? ` · region ${out.join(' & ')} outside — routing from nearest container point` : '';
+        setInfo(`length <b>${s.length.toFixed(0)}</b> · mean clearance <b>${s.meanClearance.toFixed(1)}</b>${note}`);
       }
 
       // ---- draw -----------------------------------------------------------
@@ -201,6 +195,13 @@
         poly([squareRing(B)], '#f0883e', 'rgba(240,136,62,0.18)');
 
         if (path && path.length > 1) {
+          // Dashed leader from an outside region to where the path actually
+          // meets the container (its nearest point).
+          ctx.setLineDash([5, 5]); ctx.strokeStyle = '#6e7681'; ctx.lineWidth = 1.5;
+          if (regionInsideFraction(container, [squareRing(A)]) === 0) { ctx.beginPath(); ctx.moveTo(sx(A.cx), sy(A.cy)); ctx.lineTo(sx(path[0].x), sy(path[0].y)); ctx.stroke(); }
+          if (regionInsideFraction(container, [squareRing(B)]) === 0) { ctx.beginPath(); ctx.moveTo(sx(B.cx), sy(B.cy)); ctx.lineTo(sx(path[path.length - 1].x), sy(path[path.length - 1].y)); ctx.stroke(); }
+          ctx.setLineDash([]);
+
           ctx.lineJoin = 'round'; ctx.lineCap = 'round';
           for (const [w, col] of [[7, 'rgba(255,255,255,0.14)'], [3.5, '#e6edf3']]) {
             ctx.strokeStyle = col; ctx.lineWidth = w; ctx.beginPath();
@@ -237,9 +238,11 @@
       canvas.addEventListener('pointermove', (e) => {
         if (!drag) return;
         if (drag === 'view') { cam.ox += e.clientX - lastX; cam.oy += e.clientY - lastY; lastX = e.clientX; lastY = e.clientY; viewDirty = true; draw(); return; }
+        // Free movement — a region may go anywhere, even outside the container.
         const p = pos(e);
-        const cand = validCenter(wx(p.x) + dragOff.x, wy(p.y) + dragOff.y);
-        if (cand) { if (drag === 'A') A = cand; else B = cand; recompute(); }
+        const c = { cx: wx(p.x) + dragOff.x, cy: wy(p.y) + dragOff.y };
+        if (drag === 'A') A = c; else B = c;
+        recompute();
       });
       const endDrag = () => { if (drag === 'view') canvas.classList.remove('grabbing'); drag = null; };
       canvas.addEventListener('pointerup', endDrag);
@@ -258,8 +261,6 @@
       $('smooth').addEventListener('change', recompute);
       $('size').addEventListener('input', () => {
         half = +$('size').value / 100 * Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
-        const va = validCenter(A.cx, A.cy), vb = validCenter(B.cx, B.cy);
-        if (va) A = va; if (vb) B = vb;
         recompute();
       });
 

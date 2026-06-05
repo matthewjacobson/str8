@@ -364,12 +364,12 @@ export function regionInsideFraction(rings, region) {
 }
 
 export function findRegionPath(skel, rings, regionA, regionB, { alpha = 1, visibility = true } = {}) {
-  // Both regions must overlap the container; a region entirely outside has no
-  // meaningful boundary-to-boundary connection.
-  if (regionInsideFraction(rings, regionA) === 0 || regionInsideFraction(rings, regionB) === 0) return null;
-
   const { nodes, edges } = buildSkeletonGraph(skel);
   if (edges.length === 0) return null;
+
+  // A region that's partly or wholly outside the container still works: its
+  // boundary samples are clamped to the nearest container point below, so the
+  // path simply starts from the closest point on the container to the region.
 
   let maxT = 1e-9;
   for (const nd of nodes) if (nd.t > maxT) maxT = nd.t;
