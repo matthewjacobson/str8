@@ -339,6 +339,126 @@ export function smoothPath(path, rings, { iterations = 2, minClearance } = {}) {
   return pts.map((p) => ({ x: p.x, y: p.y, t: clearanceAt(rings, p.x, p.y) }));
 }
 
+// --- region-to-region paths -----------------------------------------------
+
+/**
+ * SKETCH: central path between two sub-polygons inside a container, boundary to
+ * boundary. The path runs from the best point on regionA's boundary, through
+ * the container's straight skeleton, to the best point on regionB's boundary.
+ *
+ * Mechanism: sample each region's boundary, attach every sample to the
+ * container skeleton (face-node, goal-weighted toward the other region), then a
+ * virtual super-source over A's samples and super-sink over B's. One Dijkstra
+ * selects the optimal boundary exit/entry pair.
+ *
+ * @param skel   straight skeleton of the CONTAINER polygon.
+ * @param rings  the container polygon (outer ring first, then holes).
+ * @param regionA,regionB  sub-polygons (each `[ring, ...]`) inside the container.
+ */
+export function findRegionPath(skel, rings, regionA, regionB, { alpha = 1, visibility = true } = {}) {
+  const { nodes, edges } = buildSkeletonGraph(skel);
+  if (edges.length === 0) return null;
+
+  let maxT = 1e-9;
+  for (const nd of nodes) if (nd.t > maxT) maxT = nd.t;
+  const edgeW = (len, c) => len * (1 + alpha * (1 - c / maxT));
+
+  const adj = nodes.map(() => []);
+  const link = (i, j, w) => { adj[i].push({ to: j, w }); adj[j].push({ to: i, w }); };
+  for (const e of edges) link(e.a, e.b, edgeW(e.len, (nodes[e.a].t + nodes[e.b].t) / 2));
+
+  const faceContaining = (P) => {
+    for (const face of skel.faces) {
+      const ring = face.map((i) => [nodes[i].x, nodes[i].y]);
+      if (pointInPolygon([ring], P.x, P.y)) return face;
+    }
+    return null;
+  };
+
+  // Attach a boundary point P to the skeleton (face-node, goal-weighted toward
+  // `goal`; nearest-edge fallback) and return its node id.
+  function attach(P, goal) {
+    const face = faceContaining(P);
+    if (face) {
+      let best = null;
+      for (const idx of face) {
+        if (nodes[idx].t <= EPS_TIME) continue;
+        const d = dist2d(P.x, P.y, nodes[idx].x, nodes[idx].y);
+        const score = goal ? d + dist2d(nodes[idx].x, nodes[idx].y, goal.x, goal.y) : d;
+        if (best && score >= best.score) continue;
+        if (visibility && !segmentInside(rings, P, nodes[idx])) continue;
+        best = { idx, d, score };
+      }
+      if (best) {
+        const pid = nodes.length;
+        nodes.push({ x: P.x, y: P.y, t: 0 });
+        adj.push([]);
+        link(pid, best.idx, best.d);
+        return pid;
+      }
+    }
+    let be = null;
+    for (const e of edges) {
+      const pr = projectPointToSegment(P.x, P.y, nodes[e.a], nodes[e.b]);
+      if (!be || pr.dist < be.pr.dist) be = { pr, e };
+    }
+    if (!be) return null;
+    const projId = nodes.length;
+    nodes.push({ x: be.pr.x, y: be.pr.y, t: lerp(nodes[be.e.a].t, nodes[be.e.b].t, be.pr.t) });
+    adj.push([]);
+    const pid = nodes.length;
+    nodes.push({ x: P.x, y: P.y, t: 0 });
+    adj.push([]);
+    link(pid, projId, dist2d(P.x, P.y, be.pr.x, be.pr.y));
+    for (const end of [be.e.a, be.e.b]) {
+      link(projId, end, edgeW(dist2d(be.pr.x, be.pr.y, nodes[end].x, nodes[end].y), (nodes[projId].t + nodes[end].t) / 2));
+    }
+    return pid;
+  }
+
+  // Container size, for boundary sampling density.
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const r of rings) for (const [x, y] of r) {
+    if (x < minX) minX = x; if (y < minY) minY = y;
+    if (x > maxX) maxX = x; if (y > maxY) maxY = y;
+  }
+  const step = (Math.max(maxX - minX, maxY - minY) || 1) / 60;
+
+  const samples = (region) => {
+    const ring = region[0];
+    const pts = [];
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i], b = ring[(i + 1) % ring.length];
+      const segLen = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const n = Math.max(1, Math.ceil(segLen / step));
+      for (let k = 0; k < n; k++) {
+        const u = k / n;
+        pts.push({ x: a[0] + (b[0] - a[0]) * u, y: a[1] + (b[1] - a[1]) * u });
+      }
+    }
+    return pts;
+  };
+  const centroid = (region) => {
+    const r = region[0]; let x = 0, y = 0;
+    for (const [a, b] of r) { x += a; y += b; }
+    return { x: x / r.length, y: y / r.length };
+  };
+
+  const cA = centroid(regionA), cB = centroid(regionB);
+
+  // Super-source over A's boundary, super-sink over B's. The 0-cost links make
+  // the path's true endpoints the chosen boundary points.
+  const S = nodes.length; nodes.push({ x: cA.x, y: cA.y, t: 0 }); adj.push([]);
+  for (const p of samples(regionA)) { const pid = attach(p, cB); if (pid != null) link(S, pid, 0); }
+  const T = nodes.length; nodes.push({ x: cB.x, y: cB.y, t: 0 }); adj.push([]);
+  for (const p of samples(regionB)) { const pid = attach(p, cA); if (pid != null) link(pid, T, 0); }
+
+  const idxPath = dijkstra(adj, S, T);
+  if (!idxPath) return null;
+  // Strip the virtual source/sink → boundary-to-boundary path.
+  return idxPath.slice(1, -1).map((i) => ({ x: nodes[i].x, y: nodes[i].y, t: nodes[i].t }));
+}
+
 /** Quick metrics for judging a path: total length and clearance stats. */
 export function pathStats(path) {
   let length = 0;
