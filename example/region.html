@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>str8 — region-to-region paths</title>
+    <title>str8 — region-to-region paths (via str8-path)</title>
     <style>
       :root { color-scheme: dark; }
       * { box-sizing: border-box; }
@@ -16,6 +16,7 @@
       header { padding: 14px 20px; border-bottom: 1px solid #30363d; flex: none; }
       h1 { font-size: 16px; margin: 0; }
       header p { margin: 4px 0 0; color: #8b949e; font-size: 13px; }
+      header a { color: #58a6ff; text-decoration: none; }
       .toolbar {
         flex: none; display: flex; align-items: center; gap: 18px;
         padding: 12px 20px; border-bottom: 1px solid #30363d; flex-wrap: wrap;
@@ -37,18 +38,35 @@
       .hint { top: 10px; right: 12px; color: #6e7681; font-size: 12px; background: rgba(13,17,23,0.72); border: 1px solid #30363d; border-radius: 6px; padding: 4px 8px; pointer-events: none; }
       .legend { right: 12px; bottom: 12px; gap: 14px; align-items: center; background: rgba(13,17,23,0.72); border: 1px solid #30363d; border-radius: 6px; padding: 6px 10px; color: #8b949e; font-size: 12px; }
       .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: middle; }
-      @media (max-width: 820px) { body { overflow: auto; } .canvas-wrap { height: 62vh; } }
+      @media (max-width: 820px) { body { overflow: auto; } .canvas-wrap { height: 60vh; } }
     </style>
+
+    <!-- This demo consumes the separate str8-path package (pinned commit on
+         jsDelivr), which itself depends on str8 + jsts. We point @matthewjacobson/str8
+         at this repo's own local build. -->
+    <script type="importmap">
+      {
+        "imports": {
+          "str8-path": "https://cdn.jsdelivr.net/gh/matthewjacobson/str8-path@b08536a3ab6e6b2c91b06df05e6d85018feec678/src/index.js",
+          "@matthewjacobson/str8": "../dist/str8.js",
+          "jsts/dist/jsts.min.js": "https://unpkg.com/jsts@2.12.1/dist/jsts.min.js"
+        }
+      }
+    </script>
   </head>
   <body>
     <header>
       <h1>str8 — central paths between regions</h1>
-      <p>Two regions inside a container, connected boundary-to-boundary through the container's straight skeleton. Drag the regions.</p>
+      <p>
+        Powered by <a href="https://github.com/matthewjacobson/str8-path" target="_blank" rel="noopener">str8-path</a>'s
+        <code>PathFinder</code>. Two regions inside a container, connected
+        boundary-to-boundary through the straight skeleton. Drag the regions.
+      </p>
     </header>
 
     <div class="toolbar">
       <label class="field">Container <select id="container"></select></label>
-      <label class="field">Direct ↔ Central <input type="range" id="alpha" min="0" max="100" step="1" value="40" /></label>
+      <label class="field">Direct ↔ Central <input type="range" id="centrality" min="0" max="100" step="1" value="50" /></label>
       <label class="field">Region size <input type="range" id="size" min="5" max="16" step="1" value="9" /></label>
       <label class="check"><input type="checkbox" id="smooth" checked /> smooth</label>
       <span id="info"></span>
@@ -70,22 +88,21 @@
     </div>
 
     <script type="module">
-      import { init, buildFromPolygon } from '../dist/str8.js';
-      import { findRegionPath, buildSkeletonGraph, stringPull, smoothPath, pathStats, pointInPolygon, regionInsideFraction } from './pathfind.js';
+      import { PathFinder, loadJsts } from 'str8-path';
 
       const $ = (id) => document.getElementById(id);
       const canvas = $('c');
       const ctx = canvas.getContext('2d');
       const info = $('info');
-      const setInfo = (h, err) => { info.innerHTML = h; info.className = err ? 'err' : ''; };
 
-      // Built-in containers (good open interiors), then archive polygons.
       const BUILTIN = {
         'L-shape': [[[0, 0], [300, 0], [300, 120], [120, 120], [120, 300], [0, 300]]],
         Rectangle: [[[0, 0], [360, 0], [360, 220], [0, 220]]],
         Plus: [[[100, 0], [200, 0], [200, 100], [300, 100], [300, 200], [200, 200], [200, 300], [100, 300], [100, 200], [0, 200], [0, 100], [100, 100]]],
         'U-shape': [[[0, 0], [80, 0], [80, 220], [220, 220], [220, 0], [300, 0], [300, 300], [0, 300]]],
       };
+
+      let jsts, gf, C, ring, polyOf, archive = [];
 
       // ---- camera ---------------------------------------------------------
       const cam = { scale: 1, ox: 0, oy: 0 };
@@ -107,24 +124,14 @@
       }
 
       // ---- state ----------------------------------------------------------
-      let container = null, skel = null, graph = null, bounds = null, maxClr = 1, cCentroid = null;
+      let containerRings = null, containerPoly = null, pf = null, bounds = null, centroidPt = null, span = 1;
       let A = null, B = null, half = 11, path = null;
 
-      const squareRing = (c) => [[c.cx - half, c.cy - half], [c.cx + half, c.cy - half], [c.cx + half, c.cy + half], [c.cx - half, c.cy + half]];
-      const squareFits = (cx, cy) =>
-        pointInPolygon(container, cx, cy) &&
-        squareRing({ cx, cy }).every(([x, y]) => pointInPolygon(container, x, y));
+      const squareRing = (cc) => [[cc.cx - half, cc.cy - half], [cc.cx + half, cc.cy - half], [cc.cx + half, cc.cy + half], [cc.cx - half, cc.cy + half]];
+      const containsPt = (x, y) => containerPoly.contains(gf.createPoint(C(x, y)));
+      const squareFits = (cx, cy) => containsPt(cx, cy) && squareRing({ cx, cy }).every(([x, y]) => containsPt(x, y));
+      const squareInside = (cc) => squareRing(cc).every(([x, y]) => containsPt(x, y));
 
-      function computeBounds() {
-        let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
-        for (const ring of container) for (const [x, y] of ring) { a = Math.min(a, x); b = Math.min(b, y); c = Math.max(c, x); d = Math.max(d, y); }
-        bounds = { minX: a, minY: b, maxX: c, maxY: d };
-        const o = container[0]; let cx = 0, cy = 0; for (const [x, y] of o) { cx += x; cy += y; }
-        cCentroid = { x: cx / o.length, y: cy / o.length };
-      }
-
-      // Grid-search fitting centers; place A and B at the farthest-apart pair.
-      // Shrink the region if it's too big to fit two copies in this container.
       function placeRegions() {
         const N = 14;
         for (let attempt = 0; attempt < 6; attempt++) {
@@ -140,42 +147,48 @@
             if (!best || dd > best.dd) best = { dd, a: fit[i], b: fit[j] };
           }
           if (best && best.dd > half * 2.2) { A = { ...best.a }; B = { ...best.b }; return; }
-          half *= 0.75; // too big to separate two regions — shrink and retry
+          half *= 0.75;
         }
-        A = { cx: cCentroid.x, cy: cCentroid.y }; B = { ...A };
+        A = { cx: centroidPt.x, cy: centroidPt.y }; B = { ...A };
       }
 
       function loadContainer(key) {
-        container = BUILTIN[key] || polygons.find((p) => p.id === key).rings;
-        skel = buildFromPolygon(container);
-        graph = buildSkeletonGraph(skel);
-        maxClr = Math.max(1e-9, ...graph.nodes.map((n) => n.t));
-        computeBounds();
-        half = +$('size').value / 100 * Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+        containerRings = BUILTIN[key] || archive.find((p) => p.id === key).rings;
+        const outer = containerRings[0];
+        let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+        for (const [x, y] of outer) { a = Math.min(a, x); b = Math.min(b, y); c = Math.max(c, x); d = Math.max(d, y); }
+        bounds = { minX: a, minY: b, maxX: c, maxY: d };
+        span = Math.max(c - a, d - b);
+        let cx = 0, cy = 0; for (const [x, y] of outer) { cx += x; cy += y; }
+        centroidPt = { x: cx / outer.length, y: cy / outer.length };
+        containerPoly = polyOf(containerRings);
+        pf = new PathFinder(containerPoly);               // precompute the skeleton once
+        half = (+$('size').value / 100) * span;
         placeRegions();
         viewDirty = false; fitView();
         recompute();
       }
 
       function recompute() {
-        const t = +$('alpha').value / 100;
-        let raw = findRegionPath(skel, container, [squareRing(A)], [squareRing(B)], { alpha: t * 16 });
-        if (raw) { raw = stringPull(raw, container, { minClearance: t * 0.4 * maxClr }); if ($('smooth').checked) raw = smoothPath(raw, container, {}); }
-        path = raw; draw();
-        if (!path) { setInfo('no path found', true); return; }
-        const s = pathStats(path);
+        const centrality = +$('centrality').value / 100;
+        const smooth = $('smooth').checked;
+        const r = pf.findPath(polyOf([squareRing(A)]), polyOf([squareRing(B)]), { centrality, smooth });
+        path = r ? r.points : null;
+        draw();
+        if (!r) { info.innerHTML = 'no path'; info.className = 'err'; return; }
         const out = [];
-        if (regionInsideFraction(container, [squareRing(A)]) === 0) out.push('A');
-        if (regionInsideFraction(container, [squareRing(B)]) === 0) out.push('B');
+        if (!squareInside(A)) out.push('A');
+        if (!squareInside(B)) out.push('B');
         const note = out.length ? ` · region ${out.join(' & ')} outside — routing from nearest container point` : '';
-        setInfo(`length <b>${s.length.toFixed(0)}</b> · mean clearance <b>${s.meanClearance.toFixed(1)}</b>${note}`);
+        info.innerHTML = `length <b>${r.length.toFixed(0)}</b> · mean clearance <b>${r.clearance.mean.toFixed(1)}</b>${note}`;
+        info.className = '';
       }
 
       // ---- draw -----------------------------------------------------------
       function poly(rings, stroke, fill) {
-        for (const r of rings) {
+        for (const rr of rings) {
           ctx.beginPath();
-          r.forEach(([x, y], k) => { const px = sx(x), py = sy(y); k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py); });
+          rr.forEach(([x, y], k) => { const px = sx(x), py = sy(y); k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py); });
           ctx.closePath();
           if (fill) { ctx.fillStyle = fill; ctx.fill(); }
           ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.stroke();
@@ -185,23 +198,24 @@
         sizeCanvas();
         ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
         ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
-        if (!container) return;
-
-        ctx.strokeStyle = '#2b313a'; ctx.lineWidth = 1;
-        for (const e of graph.edges) { ctx.beginPath(); ctx.moveTo(sx(graph.nodes[e.a].x), sy(graph.nodes[e.a].y)); ctx.lineTo(sx(graph.nodes[e.b].x), sy(graph.nodes[e.b].y)); ctx.stroke(); }
-
-        poly(container, '#58a6ff', null);
+        if (!containerRings) return;
+        if (pf && pf.skeleton) {
+          const v = pf.skeleton.vertices;
+          ctx.strokeStyle = '#2b313a'; ctx.lineWidth = 1;
+          for (const face of pf.skeleton.faces) {
+            ctx.beginPath();
+            face.forEach((idx, k) => { const px = sx(v[idx * 3]), py = sy(v[idx * 3 + 1]); k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py); });
+            ctx.closePath(); ctx.stroke();
+          }
+        }
+        poly(containerRings, '#58a6ff', null);
         poly([squareRing(A)], '#3fb950', 'rgba(63,185,80,0.18)');
         poly([squareRing(B)], '#f0883e', 'rgba(240,136,62,0.18)');
-
         if (path && path.length > 1) {
-          // Dashed leader from an outside region to where the path actually
-          // meets the container (its nearest point).
           ctx.setLineDash([5, 5]); ctx.strokeStyle = '#6e7681'; ctx.lineWidth = 1.5;
-          if (regionInsideFraction(container, [squareRing(A)]) === 0) { ctx.beginPath(); ctx.moveTo(sx(A.cx), sy(A.cy)); ctx.lineTo(sx(path[0].x), sy(path[0].y)); ctx.stroke(); }
-          if (regionInsideFraction(container, [squareRing(B)]) === 0) { ctx.beginPath(); ctx.moveTo(sx(B.cx), sy(B.cy)); ctx.lineTo(sx(path[path.length - 1].x), sy(path[path.length - 1].y)); ctx.stroke(); }
+          if (!squareInside(A)) { ctx.beginPath(); ctx.moveTo(sx(A.cx), sy(A.cy)); ctx.lineTo(sx(path[0].x), sy(path[0].y)); ctx.stroke(); }
+          if (!squareInside(B)) { ctx.beginPath(); ctx.moveTo(sx(B.cx), sy(B.cy)); ctx.lineTo(sx(path[path.length - 1].x), sy(path[path.length - 1].y)); ctx.stroke(); }
           ctx.setLineDash([]);
-
           ctx.lineJoin = 'round'; ctx.lineCap = 'round';
           for (const [w, col] of [[7, 'rgba(255,255,255,0.14)'], [3.5, '#e6edf3']]) {
             ctx.strokeStyle = col; ctx.lineWidth = w; ctx.beginPath();
@@ -213,20 +227,24 @@
       }
 
       // ---- boot -----------------------------------------------------------
-      let polygons = [];
-      Promise.all([init(), fetch('polygons.json').then((r) => r.json())]).then(([, data]) => {
-        polygons = data.polygons.filter((p) => !p.builtin);
-        const sel = $('container');
-        for (const k of Object.keys(BUILTIN)) { const o = document.createElement('option'); o.value = k; o.textContent = k; sel.appendChild(o); }
-        for (const p of polygons) { const o = document.createElement('option'); o.value = p.id; o.textContent = p.label; sel.appendChild(o); }
-        sel.value = 'L-shape';
-        loadContainer('L-shape');
-      }).catch((e) => setInfo(`failed to load: ${e.message}`, true));
+      await PathFinder.init();
+      jsts = await loadJsts();
+      gf = new jsts.geom.GeometryFactory();
+      C = (x, y) => new jsts.geom.Coordinate(x, y);
+      ring = (pts) => gf.createLinearRing([...pts, pts[0]].map(([x, y]) => C(x, y)));
+      polyOf = (rings) => gf.createPolygon(ring(rings[0]), rings.slice(1).map(ring));
+
+      const data = await fetch('polygons.json').then((r) => r.json()).catch(() => ({ polygons: [] }));
+      archive = data.polygons.filter((p) => !p.builtin);
+      const sel = $('container');
+      for (const k of Object.keys(BUILTIN)) { const o = document.createElement('option'); o.value = k; o.textContent = k; sel.appendChild(o); }
+      for (const p of archive) { const o = document.createElement('option'); o.value = p.id; o.textContent = p.label; sel.appendChild(o); }
+      sel.value = 'L-shape';
+      loadContainer('L-shape');
 
       // ---- interaction ----------------------------------------------------
       function pos(e) { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
-      const inSquare = (c, x, y) => Math.abs(x - c.cx) <= half && Math.abs(y - c.cy) <= half;
-
+      const inSquare = (cc, x, y) => Math.abs(x - cc.cx) <= half && Math.abs(y - cc.cy) <= half;
       let drag = null, dragOff = null, lastX = 0, lastY = 0;
       canvas.addEventListener('pointerdown', (e) => {
         canvas.setPointerCapture(e.pointerId);
@@ -238,32 +256,23 @@
       canvas.addEventListener('pointermove', (e) => {
         if (!drag) return;
         if (drag === 'view') { cam.ox += e.clientX - lastX; cam.oy += e.clientY - lastY; lastX = e.clientX; lastY = e.clientY; viewDirty = true; draw(); return; }
-        // Free movement — a region may go anywhere, even outside the container.
-        const p = pos(e);
-        const c = { cx: wx(p.x) + dragOff.x, cy: wy(p.y) + dragOff.y };
+        const p = pos(e), c = { cx: wx(p.x) + dragOff.x, cy: wy(p.y) + dragOff.y };
         if (drag === 'A') A = c; else B = c;
         recompute();
       });
       const endDrag = () => { if (drag === 'view') canvas.classList.remove('grabbing'); drag = null; };
       canvas.addEventListener('pointerup', endDrag);
       canvas.addEventListener('pointercancel', endDrag);
-
       function zoomAt(mx, my, f) { const gx = wx(mx), gy = wy(my); cam.scale *= f; cam.ox = mx - gx * cam.scale; cam.oy = my - gy * cam.scale; viewDirty = true; draw(); }
       canvas.addEventListener('wheel', (e) => { e.preventDefault(); const p = pos(e); zoomAt(p.x, p.y, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
       canvas.addEventListener('dblclick', () => { viewDirty = false; fitView(); draw(); });
-      const centerZoom = (f) => zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, f);
-      $('zin').addEventListener('click', () => centerZoom(1.25));
-      $('zout').addEventListener('click', () => centerZoom(1 / 1.25));
+      $('zin').addEventListener('click', () => zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, 1.25));
+      $('zout').addEventListener('click', () => zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, 1 / 1.25));
       $('fit').addEventListener('click', () => { viewDirty = false; fitView(); draw(); });
-
       $('container').addEventListener('change', () => loadContainer($('container').value));
-      $('alpha').addEventListener('input', recompute);
+      $('centrality').addEventListener('input', recompute);
       $('smooth').addEventListener('change', recompute);
-      $('size').addEventListener('input', () => {
-        half = +$('size').value / 100 * Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
-        recompute();
-      });
-
+      $('size').addEventListener('input', () => { half = (+$('size').value / 100) * span; recompute(); });
       new ResizeObserver(() => { sizeCanvas(); if (!viewDirty) fitView(); draw(); }).observe($('wrap'));
     </script>
   </body>

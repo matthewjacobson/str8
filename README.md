@@ -169,7 +169,10 @@ Static demos live in `example/` — serve the repo root over HTTP (e.g.
   smoothing. Pure JS (`example/pathfind.js`) over the skeleton output.
 - `example/region.html` — **region-to-region paths**: connect two draggable
   sub-regions inside a container, boundary-to-boundary through the container's
-  central skeleton (multi-source/sink over each region's boundary).
+  central skeleton. This demo consumes the separate
+  [**str8-path**](https://github.com/matthewjacobson/str8-path) package
+  (`PathFinder`), which builds on str8 + JSTS — so it loads those from a CDN at
+  runtime.
 
 They import the built `dist/str8.js`, so run `npm run build` first.
 
