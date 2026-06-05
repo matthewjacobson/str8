@@ -134,7 +134,7 @@
         <textarea id="input" spellcheck="false"></textarea>
         <div class="row">
           <button id="run">Compute skeleton</button>
-          <button id="sample" class="secondary">Load sample</button>
+          <button id="sample" class="secondary">Load sample ▸</button>
           <label class="check"><input type="checkbox" id="invertY" /> flip Y (screen coords)</label>
         </div>
         <div id="status"></div>
@@ -422,8 +422,36 @@
 
       $('run').addEventListener('click', compute);
       $('invertY').addEventListener('change', compute);
+
+      // "Load sample" cycles through the bundled example polygons (shared with
+      // the gallery demo). Each is dropped into the textarea as a GeoJSON
+      // Polygon. Archive polygons use a y-down convention, so flip Y for them.
+      let samples = [];
+      let sampleIdx = 0;
+      fetch('polygons.json')
+        .then((r) => r.json())
+        .then((d) => { samples = d.polygons || []; })
+        .catch(() => {});
+
+      // Compact GeoJSON text: one ring per line, points inline (readable for
+      // polygons with hundreds of vertices).
+      function toGeoJSONText(rings) {
+        const body = rings
+          .map((r) => '    [' + r.map(([x, y]) => `[${x},${y}]`).join(', ') + ']')
+          .join(',\n');
+        return `{\n  "type": "Polygon",\n  "coordinates": [\n${body}\n  ]\n}`;
+      }
+
       $('sample').addEventListener('click', () => {
-        input.value = JSON.stringify(SAMPLE, null, 2);
+        if (!samples.length) {
+          input.value = JSON.stringify(SAMPLE, null, 2);
+          compute();
+          return;
+        }
+        const p = samples[sampleIdx % samples.length];
+        sampleIdx++;
+        input.value = toGeoJSONText(p.rings);
+        $('invertY').checked = !p.builtin; // archive polygons are y-down
         compute();
       });
 
