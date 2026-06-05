@@ -142,10 +142,19 @@ function dijkstra(adj, start, goal) {
  *               (default true). Set false for the naive nearest-edge attach.
  * @returns      Array of {x,y,t} path points, or null if disconnected.
  */
-export function findCentralPath(skel, rings, A, B, { alpha = 1, visibility = true } = {}) {
+export function findCentralPath(skel, rings, A, B, { alpha = 1, visibility = true, attachMode = 'edge' } = {}) {
   const { nodes, edges } = buildSkeletonGraph(skel);
   if (edges.length === 0) return null;
   const baseN = nodes.length; // skeleton-vertex count, before temp nodes
+
+  // Which skeleton face contains point P? Each face is a vertex-index loop.
+  const faceContaining = (P) => {
+    for (const face of skel.faces) {
+      const ring = face.map((i) => [nodes[i].x, nodes[i].y]);
+      if (pointInPolygon([ring], P.x, P.y)) return face;
+    }
+    return null;
+  };
 
   let maxT = 1e-9;
   for (const nd of nodes) if (nd.t > maxT) maxT = nd.t;
@@ -163,6 +172,30 @@ export function findCentralPath(skel, rings, A, B, { alpha = 1, visibility = tru
   // the nearest one whose straight connector to P stays inside the polygon.
   function attach(P0) {
     const P = clampInside(rings, P0);
+
+    // Face-node mode: jump to the best visible skeleton node of the face that
+    // actually contains P (its local spine), instead of the nearest edge point.
+    if (attachMode === 'faceNode') {
+      const face = faceContaining(P);
+      if (face) {
+        let best = null;
+        for (const idx of face) {
+          if (nodes[idx].t <= EPS_TIME) continue; // skip the face's boundary corners
+          const d = dist2d(P.x, P.y, nodes[idx].x, nodes[idx].y);
+          if (best && d >= best.d) continue;
+          if (visibility && !segmentInside(rings, P, nodes[idx])) continue;
+          best = { idx, d };
+        }
+        if (best) {
+          const pid = nodes.length;
+          nodes.push({ x: P.x, y: P.y, t: 0 });
+          adj.push([]);
+          link(pid, best.idx, best.d); // connector: pure length
+          return pid;
+        }
+      }
+      // no usable face node — fall through to edge attachment
+    }
 
     const cands = [];
     for (const e of edges) {

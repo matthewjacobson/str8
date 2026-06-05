@@ -73,6 +73,7 @@
       <label class="field">Polygon <select id="picker"></select></label>
       <label class="field">Direct ↔ Central <input type="range" id="alpha" min="0" max="100" step="1" value="40" /></label>
       <label class="check"><input type="checkbox" id="smooth" checked /> smooth</label>
+      <label class="check"><input type="checkbox" id="spine" checked /> spine entry</label>
       <label class="check"><input type="checkbox" id="vis" checked /> keep inside</label>
       <button class="btn" id="reset">Reset points</button>
       <span id="info"></span>
@@ -151,7 +152,8 @@
       function recompute() {
         const t = parseInt($('alpha').value) / 100; // 0 (direct) .. 1 (central)
         const visibility = $('vis').checked;
-        let p = A && B ? findCentralPath(skel, rings, A, B, { alpha: t * 16, visibility }) : null;
+        const attachMode = $('spine').checked ? 'faceNode' : 'edge';
+        let p = A && B ? findCentralPath(skel, rings, A, B, { alpha: t * 16, visibility, attachMode }) : null;
         if (p) {
           // Slider also sets the string-pull clearance bound: 0 = pull taut
           // (direct), high = keep the path fat and central.
@@ -305,6 +307,7 @@
       $('picker').addEventListener('change', () => loadPolygon($('picker').value));
       $('alpha').addEventListener('input', recompute);
       $('smooth').addEventListener('change', recompute);
+      $('spine').addEventListener('change', recompute);
       $('vis').addEventListener('change', recompute);
       $('reset').addEventListener('click', () => { defaultPoints(); recompute(); });
 
