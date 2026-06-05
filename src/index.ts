@@ -165,3 +165,73 @@ export function buildFromGeoJSON(
   }
   throw new Error(`str8: unsupported GeoJSON geometry type "${(geometry as { type: string }).type}".`);
 }
+
+export interface ExteriorSkeletonOptions extends BuildOptions {
+  /**
+   * The exterior straight skeleton is unbounded, so CGAL frames it with a
+   * bounding box at this distance beyond the polygon. Must be > 0. Vertices
+   * on the frame have `time` ≈ `maxOffset`.
+   */
+  maxOffset: number;
+}
+
+/**
+ * Build the *exterior* straight skeleton of a polygon — the skeleton of the
+ * unbounded region outside the outer boundary, framed at `options.maxOffset`.
+ * Holes are ignored (only the outer boundary matters outside).
+ *
+ * @returns The skeleton, or `null` on degenerate input / CGAL failure.
+ */
+export function buildExteriorSkeleton(rings: Rings, options: ExteriorSkeletonOptions): Skeleton | null {
+  const m = ensureReady();
+  if (!(options.maxOffset > 0)) {
+    throw new Error('str8: buildExteriorSkeleton requires options.maxOffset > 0.');
+  }
+  const flat = flatten(rings);
+  if (!flat) return null;
+  return m.buildExteriorSkeleton(flat.coords, flat.sizes, options.maxOffset, options.forceExact ?? false);
+}
+
+/** A single offset contour: an outer ring and its holes, each a flat `[x, y, ...]` array. */
+export interface OffsetPolygon {
+  outer: Float32Array;
+  holes: Float32Array[];
+}
+
+export interface OffsetOptions extends BuildOptions {
+  /**
+   * `false` (default) insets the polygon inward; `true` outsets it (the
+   * exterior offset), growing outward from the outer boundary.
+   */
+  exterior?: boolean;
+}
+
+/**
+ * Offset (inset or outset) a polygon by `distance`, via the straight skeleton.
+ *
+ * An inset can split into several disjoint pieces (or vanish entirely past the
+ * polygon's max inradius), so the result is an *array* of contours. Each
+ * contour is an `{ outer, holes }` polygon.
+ *
+ * @param distance How far to offset. Must be > 0.
+ * @returns The offset contours (possibly empty), or `null` on CGAL failure.
+ */
+export function offsetPolygon(
+  rings: Rings,
+  distance: number,
+  options: OffsetOptions = {},
+): OffsetPolygon[] | null {
+  const m = ensureReady();
+  if (!(distance > 0)) {
+    throw new Error('str8: offsetPolygon requires distance > 0.');
+  }
+  const flat = flatten(rings);
+  if (!flat) return null;
+  return m.offsetPolygons(
+    flat.coords,
+    flat.sizes,
+    distance,
+    options.exterior ?? false,
+    options.forceExact ?? false,
+  );
+}

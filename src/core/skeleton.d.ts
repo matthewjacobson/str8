@@ -13,6 +13,21 @@ export interface SkeletonModule {
     ringSizes: ArrayLike<number>,
     forceExact: boolean,
   ): { vertices: Float32Array; faces: number[][] } | null;
+
+  buildExteriorSkeleton(
+    rings: ArrayLike<number>,
+    ringSizes: ArrayLike<number>,
+    maxOffset: number,
+    forceExact: boolean,
+  ): { vertices: Float32Array; faces: number[][] } | null;
+
+  offsetPolygons(
+    rings: ArrayLike<number>,
+    ringSizes: ArrayLike<number>,
+    distance: number,
+    exterior: boolean,
+    forceExact: boolean,
+  ): { outer: Float32Array; holes: Float32Array[] }[] | null;
 }
 
 declare const createSkeletonModule: (

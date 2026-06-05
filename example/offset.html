@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>str8 — offsets & exterior skeletons</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0; font: 14px/1.5 system-ui, sans-serif;
+        background: #0e1116; color: #e6edf3;
+        display: flex; flex-direction: column; overflow: hidden;
+      }
+      header { padding: 14px 20px; border-bottom: 1px solid #30363d; flex: none; }
+      h1 { font-size: 16px; margin: 0; }
+      header p { margin: 4px 0 0; color: #8b949e; font-size: 13px; }
+      header a { color: #58a6ff; text-decoration: none; }
+
+      .toolbar {
+        flex: none; display: flex; align-items: center; gap: 18px;
+        padding: 12px 20px; border-bottom: 1px solid #30363d; flex-wrap: wrap;
+      }
+      label.field { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #8b949e; }
+      select {
+        background: #161b22; color: #e6edf3; border: 1px solid #30363d;
+        border-radius: 6px; padding: 7px 10px; font: inherit; min-width: 170px;
+      }
+      input[type='range'] { width: 150px; accent-color: #58a6ff; }
+      .check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: #8b949e; user-select: none; }
+      #info { font-size: 13px; color: #8b949e; }
+      #info.err { color: #f85149; }
+      #info b { color: #e6edf3; font-weight: 600; }
+      .spacer { flex: 1; }
+      button {
+        background: rgba(22, 27, 34, 0.9); border: 1px solid #30363d; color: #e6edf3;
+        border-radius: 6px; font: inherit; cursor: pointer;
+      }
+      .zoom-btn { width: 34px; height: 34px; padding: 0; font-size: 18px; line-height: 1; }
+      .zoom-btn.wide { width: auto; padding: 0 12px; font-size: 13px; font-weight: 600; }
+
+      .canvas-wrap { position: relative; flex: 1; min-height: 0; background: #0e1116; }
+      canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+      canvas.dragging { cursor: grabbing; }
+      .overlay { position: absolute; display: flex; }
+      .hint {
+        top: 10px; right: 12px; color: #6e7681; font-size: 12px;
+        background: rgba(13, 17, 23, 0.72); border: 1px solid #30363d;
+        border-radius: 6px; padding: 4px 8px; pointer-events: none;
+      }
+      .legend {
+        right: 12px; bottom: 12px; gap: 14px; align-items: center;
+        background: rgba(13, 17, 23, 0.72); border: 1px solid #30363d;
+        border-radius: 6px; padding: 6px 10px; color: #8b949e; font-size: 12px;
+      }
+      .swatch { display: inline-block; width: 12px; height: 3px; vertical-align: middle; }
+      @media (max-width: 760px) { body { overflow: auto; } .canvas-wrap { height: 60vh; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>str8 — offsets &amp; exterior skeletons</h1>
+      <p>
+        Interior/exterior straight skeletons and offset (inset/outset) contours.
+        Sample polygons from
+        <a href="https://github.com/LingDong-/interesting-polygon-archive" target="_blank" rel="noopener"
+          >interesting-polygon-archive</a
+        >.
+      </p>
+    </header>
+
+    <div class="toolbar">
+      <label class="field">Polygon <select id="picker"></select></label>
+      <label class="field">Mode
+        <select id="mode">
+          <option value="offset-in">Interior offset</option>
+          <option value="offset-out">Exterior offset</option>
+          <option value="skel-in">Interior skeleton</option>
+          <option value="skel-out">Exterior skeleton</option>
+        </select>
+      </label>
+      <label class="field" id="distField">Distance <input type="range" id="dist" min="2" max="200" step="1" value="35" /></label>
+      <label class="check" id="concField"><input type="checkbox" id="conc" checked /> concentric</label>
+      <span id="info"></span>
+      <span class="spacer"></span>
+      <button class="zoom-btn wide" id="fit">Fit</button>
+      <button class="zoom-btn" id="zin" title="Zoom in">+</button>
+      <button class="zoom-btn" id="zout" title="Zoom out">−</button>
+    </div>
+
+    <div class="canvas-wrap" id="wrap">
+      <canvas id="c"></canvas>
+      <div class="overlay hint">scroll to zoom · drag to pan · double-click to fit</div>
+      <div class="overlay legend">
+        <span><span class="swatch" style="background:#58a6ff"></span> polygon</span>
+        <span><span class="swatch" style="background:#3fb950"></span> inset</span>
+        <span><span class="swatch" style="background:#f0883e"></span> outset</span>
+        <span><span class="swatch" style="background:#f78166"></span> skeleton</span>
+      </div>
+    </div>
+
+    <script type="module">
+      import { init, buildFromPolygon, buildExteriorSkeleton, offsetPolygon } from '../dist/str8.js';
+
+      const $ = (id) => document.getElementById(id);
+      const canvas = $('c');
+      const ctx = canvas.getContext('2d');
+      const info = $('info');
+      const setInfo = (h, err) => { info.innerHTML = h; info.className = err ? 'err' : ''; };
+
+      const MAX_RINGS = 8; // cap concentric offset rings (each is a skeleton build)
+
+      // ---- camera (world -> screen, CSS px; y down) ----------------------
+      let scene = null;
+      const cam = { scale: 1, ox: 0, oy: 0 };
+      let viewDirty = false, dpr = 1;
+
+      function sizeCanvas() {
+        dpr = window.devicePixelRatio || 1;
+        const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
+        const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+        if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+      }
+      function fitView() {
+        if (!scene) return;
+        const W = canvas.clientWidth, H = canvas.clientHeight, pad = 40;
+        const { minX, minY, maxX, maxY } = scene.bounds;
+        const spanX = maxX - minX || 1, spanY = maxY - minY || 1;
+        cam.scale = Math.min((W - pad * 2) / spanX, (H - pad * 2) / spanY);
+        const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+        cam.ox = W / 2 - cx * cam.scale;
+        cam.oy = H / 2 - cy * cam.scale;
+        viewDirty = false;
+      }
+
+      const sx = (x) => cam.ox + x * cam.scale;
+      const sy = (y) => cam.oy + y * cam.scale;
+
+      function strokeRing(flat, close = true) {
+        ctx.beginPath();
+        for (let i = 0; i < flat.length; i += 2) {
+          const px = sx(flat[i]), py = sy(flat[i + 1]);
+          i === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+        }
+        if (close) ctx.closePath();
+        ctx.stroke();
+      }
+
+      function draw() {
+        sizeCanvas();
+        const W = canvas.clientWidth, H = canvas.clientHeight;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, W, H);
+        if (!scene) return;
+
+        // Offset contours.
+        ctx.lineWidth = 1.5;
+        for (const c of scene.contours) {
+          ctx.strokeStyle = c.color;
+          strokeRing(c.outer);
+          for (const hole of c.holes) strokeRing(hole);
+        }
+
+        // Skeleton edges + nodes.
+        if (scene.skel) {
+          const v = scene.skel.vertices;
+          ctx.strokeStyle = '#f78166';
+          ctx.lineWidth = 1;
+          for (const face of scene.skel.faces) {
+            ctx.beginPath();
+            face.forEach((idx, k) => {
+              const j = idx * 3, px = sx(v[j]), py = sy(v[j + 1]);
+              k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+            });
+            ctx.closePath();
+            ctx.stroke();
+          }
+          let maxT = 0;
+          for (let i = 2; i < v.length; i += 3) maxT = Math.max(maxT, v[i]);
+          for (let i = 0; i < v.length; i += 3) {
+            const t = maxT ? v[i + 2] / maxT : 0;
+            ctx.fillStyle = `hsl(${200 - t * 160} 80% 60%)`;
+            ctx.beginPath();
+            ctx.arc(sx(v[i]), sy(v[i + 1]), 2, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+
+        // Original polygon on top.
+        ctx.strokeStyle = '#58a6ff';
+        ctx.lineWidth = 2;
+        for (const ring of scene.rings) {
+          ctx.beginPath();
+          ring.forEach(([x, y], k) => {
+            const px = sx(x), py = sy(y);
+            k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+          });
+          ctx.closePath();
+          ctx.stroke();
+        }
+      }
+
+      // ---- compute --------------------------------------------------------
+      function compute() {
+        const p = polygons.find((p) => p.id === $('picker').value);
+        if (!p) return;
+        const rings = p.rings;
+
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        const see = (x, y) => {
+          if (x < minX) minX = x; if (y < minY) minY = y;
+          if (x > maxX) maxX = x; if (y > maxY) maxY = y;
+        };
+        for (const ring of rings) for (const [x, y] of ring) see(x, y);
+        const span = Math.max(maxX - minX, maxY - minY) || 1;
+
+        const mode = $('mode').value;
+        const isOffset = mode === 'offset-in' || mode === 'offset-out';
+        const exterior = mode === 'offset-out' || mode === 'skel-out';
+        const step = (parseInt($('dist').value) / 1000) * span; // distance per ring
+        const concentric = $('conc').checked && isOffset;
+
+        const contours = [];
+        let skel = null;
+        const color = exterior ? '#f0883e' : '#3fb950';
+
+        const addContours = (list) => {
+          if (!list) return 0;
+          for (const c of list) {
+            contours.push({ outer: c.outer, holes: c.holes, color });
+            for (let i = 0; i < c.outer.length; i += 2) see(c.outer[i], c.outer[i + 1]);
+          }
+          return list.length;
+        };
+
+        let note = '';
+        if (isOffset) {
+          const rings_ = concentric ? MAX_RINGS : 1;
+          let drawn = 0;
+          for (let k = 1; k <= rings_; k++) {
+            const list = offsetPolygon(rings, k * step, { exterior });
+            const n = addContours(list);
+            drawn += n;
+            if (!exterior && n === 0) break; // fully eroded — stop insetting
+          }
+          note = `${exterior ? 'outset' : 'inset'} · step <b>${step.toFixed(1)}</b> · <b>${drawn}</b> contour${drawn === 1 ? '' : 's'}`;
+        } else if (mode === 'skel-in') {
+          skel = buildFromPolygon(rings);
+          note = skel ? `interior skeleton · <b>${skel.faces.length}</b> faces` : 'skeleton failed';
+        } else {
+          skel = buildExteriorSkeleton(rings, { maxOffset: step });
+          if (skel) for (let i = 0; i < skel.vertices.length; i += 3) see(skel.vertices[i], skel.vertices[i + 1]);
+          note = skel ? `exterior skeleton · frame +${step.toFixed(1)} · <b>${skel.faces.length}</b> faces` : 'skeleton failed';
+        }
+
+        const verts = rings.reduce((a, r) => a + r.length, 0);
+        scene = { rings, contours, skel, bounds: { minX, minY, maxX, maxY } };
+        if (!viewDirty) fitView();
+        draw();
+        setInfo(`<b>${verts}</b> vertices · ${note}`, false);
+      }
+
+      // ---- boot -----------------------------------------------------------
+      let polygons = [];
+      Promise.all([init(), fetch('polygons.json').then((r) => r.json())])
+        .then(([, data]) => {
+          polygons = data.polygons;
+          for (const p of polygons) {
+            const opt = document.createElement('option');
+            opt.value = p.id; opt.textContent = p.label;
+            $('picker').appendChild(opt);
+          }
+          const def = polygons.find((p) => p.id === 'held-3') || polygons[0];
+          $('picker').value = def.id;
+          compute();
+        })
+        .catch((e) => setInfo(`failed to load: ${e.message}`, true));
+
+      function refreshControls() {
+        const isOffset = $('mode').value.startsWith('offset');
+        $('concField').style.display = isOffset ? '' : 'none';
+        $('distField').firstChild.textContent =
+          $('mode').value === 'skel-in' ? 'Distance ' : ($('mode').value === 'skel-out' ? 'Frame ' : 'Distance ');
+        $('distField').style.opacity = $('mode').value === 'skel-in' ? 0.4 : 1;
+      }
+
+      // ---- events ---------------------------------------------------------
+      $('picker').addEventListener('change', () => { viewDirty = false; compute(); });
+      $('mode').addEventListener('change', () => { refreshControls(); viewDirty = false; compute(); });
+      $('dist').addEventListener('input', compute);
+      $('conc').addEventListener('change', compute);
+      refreshControls();
+
+      function pointerPos(e) { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+      function zoomAt(mx, my, f) {
+        const wx = (mx - cam.ox) / cam.scale, wy = (my - cam.oy) / cam.scale;
+        cam.scale *= f; cam.ox = mx - wx * cam.scale; cam.oy = my - wy * cam.scale;
+        viewDirty = true; draw();
+      }
+      canvas.addEventListener('wheel', (e) => { e.preventDefault(); const { x, y } = pointerPos(e); zoomAt(x, y, Math.exp(-e.deltaY * 0.0015)); }, { passive: false });
+      let dragging = false, lastX = 0, lastY = 0;
+      canvas.addEventListener('pointerdown', (e) => { dragging = true; canvas.classList.add('dragging'); canvas.setPointerCapture(e.pointerId); lastX = e.clientX; lastY = e.clientY; });
+      canvas.addEventListener('pointermove', (e) => { if (!dragging) return; cam.ox += e.clientX - lastX; cam.oy += e.clientY - lastY; lastX = e.clientX; lastY = e.clientY; viewDirty = true; draw(); });
+      const endDrag = (e) => { if (!dragging) return; dragging = false; canvas.classList.remove('dragging'); try { canvas.releasePointerCapture(e.pointerId); } catch {} };
+      canvas.addEventListener('pointerup', endDrag);
+      canvas.addEventListener('pointercancel', endDrag);
+      canvas.addEventListener('dblclick', () => { viewDirty = false; fitView(); draw(); });
+
+      const centerZoom = (f) => zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, f);
+      $('zin').addEventListener('click', () => centerZoom(1.25));
+      $('zout').addEventListener('click', () => centerZoom(1 / 1.25));
+      $('fit').addEventListener('click', () => { viewDirty = false; fitView(); draw(); });
+
+      new ResizeObserver(() => { sizeCanvas(); if (scene && !viewDirty) fitView(); draw(); }).observe($('wrap'));
+    </script>
+  </body>
+</html>

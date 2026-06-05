@@ -24,8 +24,8 @@
       main { max-width: 760px; width: 100%; }
       h1 { font-size: 40px; margin: 0 0 4px; letter-spacing: -0.02em; }
       .tag { color: #8b949e; margin: 0 0 24px; font-size: 17px; }
-      .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 24px 0; }
-      @media (max-width: 640px) { .cards { grid-template-columns: 1fr; } }
+      .cards { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin: 24px 0; }
+      @media (max-width: 560px) { .cards { grid-template-columns: 1fr; } }
       a.card {
         display: block;
         text-decoration: none;
@@ -74,6 +74,10 @@
         <a class="card" href="example/roof.html">
           <h2>⌂ 3D roofs</h2>
           <p>The same polygons lifted into straight-skeleton roofs (height = wavefront time), in three.js.</p>
+        </a>
+        <a class="card" href="example/offset.html">
+          <h2>◎ Offsets &amp; exterior</h2>
+          <p>Inset/outset offset contours and interior/exterior straight skeletons, with a distance slider.</p>
         </a>
       </div>
 

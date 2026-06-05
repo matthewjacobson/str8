@@ -1,7 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { init, isReady, buildFromPolygon, buildFromGeoJSON } from '../dist/str8.js';
+import {
+  init,
+  isReady,
+  buildFromPolygon,
+  buildFromGeoJSON,
+  buildExteriorSkeleton,
+  offsetPolygon,
+} from '../dist/str8.js';
+
+const SQUARE = [
+  [
+    [0, 0],
+    [100, 0],
+    [100, 100],
+    [0, 100],
+  ],
+];
 
 test('init resolves and isReady flips', async () => {
   assert.equal(isReady(), false);
@@ -148,4 +164,66 @@ test('buildFromGeoJSON handles Polygon and MultiPolygon', async () => {
   });
   assert.equal(multi.length, 2);
   assert.ok(multi[0] && multi[1]);
+});
+
+test('buildExteriorSkeleton frames the polygon and produces faces', async () => {
+  await init();
+  const ext = buildExteriorSkeleton(SQUARE, { maxOffset: 40 });
+  assert.ok(ext, 'expected an exterior skeleton');
+  assert.ok(ext.faces.length >= 4);
+  // The bounding frame sits ~maxOffset beyond the square (200x200 footprint).
+  let maxTime = 0;
+  for (let i = 2; i < ext.vertices.length; i += 3) maxTime = Math.max(maxTime, ext.vertices[i]);
+  assert.ok(maxTime > 0);
+});
+
+test('buildExteriorSkeleton requires a positive maxOffset', async () => {
+  await init();
+  assert.throws(() => buildExteriorSkeleton(SQUARE, { maxOffset: 0 }));
+});
+
+test('interior offset insets, and erodes to nothing past the inradius', async () => {
+  await init();
+  const inset = offsetPolygon(SQUARE, 20); // inradius is 50
+  assert.ok(inset);
+  assert.equal(inset.length, 1);
+  assert.equal(inset[0].outer.length / 2, 4); // still a quad
+  assert.equal(inset[0].holes.length, 0);
+
+  // Inset of an 80x80 inner square should be ~60x60: spans 20..80.
+  const xs = [];
+  for (let i = 0; i < inset[0].outer.length; i += 2) xs.push(inset[0].outer[i]);
+  assert.ok(Math.min(...xs) > 15 && Math.max(...xs) < 85);
+
+  const eroded = offsetPolygon(SQUARE, 60);
+  assert.ok(eroded);
+  assert.equal(eroded.length, 0); // fully collapsed
+});
+
+test('interior offset of a polygon with a hole grows the hole', async () => {
+  await init();
+  const withHole = [
+    [[0, 0], [100, 0], [100, 100], [0, 100]],
+    [[40, 40], [40, 60], [60, 60], [60, 40]],
+  ];
+  const inset = offsetPolygon(withHole, 8);
+  assert.ok(inset);
+  assert.equal(inset.length, 1);
+  assert.equal(inset[0].holes.length, 1);
+});
+
+test('exterior offset outsets the boundary', async () => {
+  await init();
+  const out = offsetPolygon(SQUARE, 20, { exterior: true });
+  assert.ok(out);
+  assert.ok(out.length >= 1);
+  // The outset contour should extend beyond the original [0,100] bounds.
+  const xs = [];
+  for (let i = 0; i < out[0].outer.length; i += 2) xs.push(out[0].outer[i]);
+  assert.ok(Math.min(...xs) < 0 && Math.max(...xs) > 100);
+});
+
+test('offsetPolygon requires a positive distance', async () => {
+  await init();
+  assert.throws(() => offsetPolygon(SQUARE, 0));
 });

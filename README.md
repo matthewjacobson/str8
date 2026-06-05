@@ -10,10 +10,16 @@ using **CGAL 6.1**, **Emscripten 4.x** (embind), and a modern ESM bundle.
 
 ## What it computes
 
-The **interior straight skeleton** of a simple polygon (with optional holes):
-the set of edges traced by the polygon's edges as they move inward at constant
-speed. Each skeleton vertex carries a `time` value — the distance the wavefront
-travelled to reach it — which doubles as a roof height.
+The **straight skeleton** of a simple polygon (with optional holes): the set of
+edges traced by the polygon's edges as they move inward at constant speed. Each
+skeleton vertex carries a `time` value — the distance the wavefront travelled to
+reach it — which doubles as a roof height.
+
+str8 computes:
+
+- **Interior** and **exterior** straight skeletons.
+- **Offset contours** — inset (erode) or outset (dilate) a polygon by a
+  distance, derived from the skeleton.
 
 **[▶ Live demos](https://matthewjacobson.github.io/str8/)**
 
@@ -70,15 +76,26 @@ const results = buildFromGeoJSON({
 | --- | --- |
 | `init(): Promise<void>` | Loads and instantiates the WASM module. Await once before building. |
 | `isReady(): boolean` | Whether the module is loaded. |
-| `buildFromPolygon(rings): Skeleton \| null` | Skeleton of a polygon. Ring 0 is the outer boundary; the rest are holes. |
-| `buildFromGeoJSON(geometry): (Skeleton \| null)[]` | Skeletons from a GeoJSON `Polygon` / `MultiPolygon`. |
+| `buildFromPolygon(rings, opts?): Skeleton \| null` | Interior skeleton of a polygon. Ring 0 is the outer boundary; the rest are holes. |
+| `buildFromGeoJSON(geometry, opts?): (Skeleton \| null)[]` | Interior skeletons from a GeoJSON `Polygon` / `MultiPolygon`. |
+| `buildExteriorSkeleton(rings, { maxOffset }): Skeleton \| null` | Exterior skeleton, framed `maxOffset` beyond the polygon. |
+| `offsetPolygon(rings, distance, opts?): OffsetPolygon[] \| null` | Inset (default) or outset (`{ exterior: true }`) offset contours. |
 
 ```ts
 interface Skeleton {
   vertices: Float32Array; // [x, y, time, ...]
   faces: number[][];      // vertex indices, one list per face
 }
+
+interface OffsetPolygon {
+  outer: Float32Array;    // [x, y, ...]
+  holes: Float32Array[];  // each [x, y, ...]
+}
 ```
+
+An inset can split into several pieces or vanish past the polygon's max
+inradius, so `offsetPolygon` returns an *array* of contours (possibly empty).
+All builders accept `{ forceExact: true }` to skip the fast kernel (see below).
 
 ### Input handling (modernizations over the original)
 
@@ -143,6 +160,9 @@ Static demos live in `example/` — serve the repo root over HTTP (e.g.
   polygons lifted into roofs where each vertex's height is its wavefront
   `time`, rendered with [three.js](https://threejs.org/) (orbit, adjustable
   pitch). three.js is loaded from a CDN, so this page needs network access.
+- `example/offset.html` — **offsets & exterior skeletons**: inset/outset
+  offset contours (with concentric stepping) and interior/exterior straight
+  skeletons, driven by a distance slider, with pan/zoom.
 
 They import the built `dist/str8.js`, so run `npm run build` first.
 
