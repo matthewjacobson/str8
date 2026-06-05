@@ -139,6 +139,10 @@ Two static demos live in `example/` — serve the repo root over HTTP (e.g.
   `MultiPolygon`, `Feature`, `FeatureCollection`, or a bare coordinates array)
   and see its skeleton, with pan/zoom and a Y-flip toggle for
   screen-coordinate data.
+- `example/roof.html` — **3D straight-skeleton roofs**: the same sample
+  polygons lifted into roofs where each vertex's height is its wavefront
+  `time`, rendered with [three.js](https://threejs.org/) (orbit, adjustable
+  pitch). three.js is loaded from a CDN, so this page needs network access.
 
 Both import the built `dist/str8.js`, so run `npm run build` first.
 
