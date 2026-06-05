@@ -1,9 +1,21 @@
 {
-  "name": "str8",
+  "name": "@matthewjacobson/str8",
   "version": "0.1.0",
   "description": "Modern straight-skeleton computation in the browser and Node, powered by CGAL + WebAssembly.",
   "type": "module",
   "license": "MIT",
+  "author": "matthewjacobson",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/matthewjacobson/str8.git"
+  },
+  "homepage": "https://matthewjacobson.github.io/str8/",
+  "bugs": {
+    "url": "https://github.com/matthewjacobson/str8/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/str8.js",
   "module": "./dist/str8.js",
   "types": "./dist/index.d.ts",

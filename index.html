@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>str8 — straight skeletons in the browser</title>
+    <meta
+      name="description"
+      content="Modern straight-skeleton computation in the browser and Node, powered by CGAL + WebAssembly."
+    />
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 16px/1.6 system-ui, sans-serif;
+        background: #0e1116;
+        color: #e6edf3;
+        display: grid;
+        place-items: center;
+        min-height: 100vh;
+        padding: 24px;
+      }
+      main { max-width: 640px; width: 100%; }
+      h1 { font-size: 40px; margin: 0 0 4px; letter-spacing: -0.02em; }
+      .tag { color: #8b949e; margin: 0 0 24px; font-size: 17px; }
+      .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 24px 0; }
+      @media (max-width: 540px) { .cards { grid-template-columns: 1fr; } }
+      a.card {
+        display: block;
+        text-decoration: none;
+        color: inherit;
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 12px;
+        padding: 18px;
+        transition: border-color 0.15s, transform 0.15s;
+      }
+      a.card:hover { border-color: #58a6ff; transform: translateY(-2px); }
+      a.card h2 { font-size: 17px; margin: 0 0 4px; }
+      a.card p { margin: 0; color: #8b949e; font-size: 14px; }
+      .meta { display: flex; gap: 16px; flex-wrap: wrap; color: #8b949e; font-size: 14px; }
+      .meta a { color: #58a6ff; text-decoration: none; }
+      code {
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        padding: 2px 7px;
+        font: 14px ui-monospace, Menlo, monospace;
+      }
+      .install { margin: 8px 0 24px; }
+      footer { margin-top: 28px; color: #6e7681; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>str8</h1>
+      <p class="tag">
+        Straight-skeleton computation in the browser and Node — CGAL’s
+        <code>Straight_skeleton_2</code> compiled to WebAssembly.
+      </p>
+
+      <div class="install"><code>npm install @matthewjacobson/str8</code></div>
+
+      <div class="cards">
+        <a class="card" href="example/geojson.html">
+          <h2>▶ Paste-GeoJSON demo</h2>
+          <p>Drop in a Polygon / MultiPolygon / FeatureCollection and see its skeleton.</p>
+        </a>
+        <a class="card" href="example/index.html">
+          <h2>★ Star demo</h2>
+          <p>A fixed star-with-hole rendered to canvas, coloured by wavefront time.</p>
+        </a>
+      </div>
+
+      <div class="meta">
+        <a href="https://github.com/matthewjacobson/str8">GitHub repo</a>
+        <a href="https://www.npmjs.com/package/@matthewjacobson/str8">npm package</a>
+        <span>CGAL 6.1 · Emscripten · embind · single-file ESM</span>
+      </div>
+
+      <footer>MIT licensed. CGAL’s Straight_skeleton_2 is GPL — review CGAL licensing for your use.</footer>
+    </main>
+  </body>
+</html>

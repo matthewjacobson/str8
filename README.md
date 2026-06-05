@@ -15,10 +15,12 @@ the set of edges traced by the polygon's edges as they move inward at constant
 speed. Each skeleton vertex carries a `time` value — the distance the wavefront
 travelled to reach it — which doubles as a roof height.
 
+**[▶ Live demo](https://matthewjacobson.github.io/str8/)** — paste your own GeoJSON and see its skeleton.
+
 ## Install
 
 ```sh
-npm install str8
+npm install @matthewjacobson/str8
 ```
 
 The published package is a single ESM file with the WASM **embedded** (base64),
@@ -27,7 +29,7 @@ so there's nothing extra to host or configure.
 ## Usage
 
 ```ts
-import { init, buildFromPolygon } from 'str8';
+import { init, buildFromPolygon } from '@matthewjacobson/str8';
 
 await init(); // load the WASM module once
 
@@ -52,7 +54,7 @@ if (skeleton) {
 ### GeoJSON
 
 ```ts
-import { init, buildFromGeoJSON } from 'str8';
+import { init, buildFromGeoJSON } from '@matthewjacobson/str8';
 
 await init();
 const results = buildFromGeoJSON({
