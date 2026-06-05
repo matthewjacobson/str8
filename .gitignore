@@ -1,0 +1,11 @@
+node_modules/
+build/
+
+# OS / editor / tooling
+.DS_Store
+.idea/
+.claude/
+
+# Note: dist/ and src/core/skeleton.js (the prebuilt single-file WASM module)
+# are committed so the examples/demo work after clone without the emsdk + CGAL
+# toolchain. Rebuild them with `npm run build:all`.

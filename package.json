@@ -1,0 +1,42 @@
+{
+  "name": "str8",
+  "version": "0.1.0",
+  "description": "Modern straight-skeleton computation in the browser and Node, powered by CGAL + WebAssembly.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./dist/str8.js",
+  "module": "./dist/str8.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/str8.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build:wasm": "bash scripts/build-wasm.sh",
+    "build:js": "esbuild src/index.ts --bundle --format=esm --platform=neutral --external:module --external:fs --external:path --external:url --external:crypto --outfile=dist/str8.js",
+    "build:types": "tsc -p tsconfig.json",
+    "build": "npm run build:js && npm run build:types",
+    "build:all": "npm run build:wasm && npm run build",
+    "test": "node --test test/"
+  },
+  "keywords": [
+    "straight-skeleton",
+    "polygon",
+    "cgal",
+    "wasm",
+    "webassembly",
+    "geometry",
+    "offset",
+    "roof"
+  ],
+  "devDependencies": {
+    "esbuild": "^0.24.0",
+    "typescript": "^5.5.0"
+  }
+}

@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>str8 — straight skeleton demo</title>
+    <style>
+      :root { color-scheme: dark; }
+      body {
+        margin: 0;
+        font: 14px/1.5 system-ui, sans-serif;
+        background: #0e1116;
+        color: #e6edf3;
+        display: grid;
+        place-items: center;
+        min-height: 100vh;
+      }
+      .card {
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 12px;
+        padding: 20px;
+      }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      p { margin: 0 0 16px; color: #8b949e; }
+      canvas { background: #0e1116; border-radius: 8px; display: block; }
+      .legend { margin-top: 12px; display: flex; gap: 16px; color: #8b949e; }
+      .swatch { display: inline-block; width: 12px; height: 3px; vertical-align: middle; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1>str8 — interior straight skeleton</h1>
+      <p>CGAL 6.1 · Emscripten · embind · single-file ESM</p>
+      <canvas id="c" width="560" height="560"></canvas>
+      <div class="legend">
+        <span><span class="swatch" style="background:#58a6ff"></span> polygon</span>
+        <span><span class="swatch" style="background:#f78166"></span> skeleton</span>
+        <span>node colour = wavefront time</span>
+      </div>
+    </div>
+
+    <script type="module">
+      import { init, buildFromPolygon } from '../dist/str8.js';
+
+      // A star with a square hole — exercises both the outer ring and a hole.
+      const polygon = [
+        [
+          [-1, -1], [0, -12], [1, -1], [12, 0], [1, 1],
+          [0, 12], [-1, 1], [-12, 0],
+        ],
+        [
+          [-1, 0], [0, 1], [1, 0], [0, -1],
+        ],
+      ];
+
+      await init();
+      const skeleton = buildFromPolygon(polygon);
+      if (!skeleton) throw new Error('skeleton computation failed');
+
+      const canvas = document.getElementById('c');
+      const ctx = canvas.getContext('2d');
+      const { width, height } = canvas;
+
+      // Fit the [-12,12] world into the canvas with padding.
+      const pad = 30;
+      const scale = (Math.min(width, height) - pad * 2) / 24;
+      const tx = (x) => width / 2 + x * scale;
+      const ty = (y) => height / 2 - y * scale;
+
+      const v = skeleton.vertices;
+      let maxTime = 0;
+      for (let i = 2; i < v.length; i += 3) maxTime = Math.max(maxTime, v[i]);
+
+      // Skeleton edges (each face boundary; interior bisectors get drawn twice,
+      // which is fine for a demo).
+      ctx.strokeStyle = '#f78166';
+      ctx.lineWidth = 1;
+      for (const face of skeleton.faces) {
+        ctx.beginPath();
+        for (let k = 0; k < face.length; k++) {
+          const idx = face[k] * 3;
+          const px = tx(v[idx]);
+          const py = ty(v[idx + 1]);
+          if (k === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.stroke();
+      }
+
+      // Polygon outline on top.
+      ctx.strokeStyle = '#58a6ff';
+      ctx.lineWidth = 2;
+      for (const ring of polygon) {
+        ctx.beginPath();
+        ring.forEach(([x, y], k) => {
+          const px = tx(x), py = ty(y);
+          k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+        });
+        ctx.closePath();
+        ctx.stroke();
+      }
+
+      // Skeleton nodes, coloured by time.
+      for (let i = 0; i < v.length; i += 3) {
+        const t = maxTime ? v[i + 2] / maxTime : 0;
+        const hue = 200 - t * 160; // blue (edge) -> red (deep interior)
+        ctx.fillStyle = `hsl(${hue} 80% 60%)`;
+        ctx.beginPath();
+        ctx.arc(tx(v[i]), ty(v[i + 1]), 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      console.log(
+        `str8: ${v.length / 3} vertices, ${skeleton.faces.length} faces, ` +
+          `max time ${maxTime.toFixed(3)}`,
+      );
+    </script>
+  </body>
+</html>

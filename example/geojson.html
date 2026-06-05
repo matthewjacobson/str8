@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>str8 — paste GeoJSON</title>
+    <style>
+      :root { color-scheme: dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 14px/1.5 system-ui, sans-serif;
+        background: #0e1116;
+        color: #e6edf3;
+      }
+      header { padding: 16px 20px; border-bottom: 1px solid #30363d; }
+      h1 { font-size: 16px; margin: 0; }
+      header p { margin: 4px 0 0; color: #8b949e; font-size: 13px; }
+      main {
+        display: grid;
+        grid-template-columns: 380px 1fr;
+        gap: 16px;
+        padding: 16px 20px;
+        align-items: start;
+      }
+      @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
+      .panel { display: flex; flex-direction: column; gap: 10px; }
+      textarea {
+        width: 100%;
+        height: 360px;
+        resize: vertical;
+        background: #161b22;
+        color: #e6edf3;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        padding: 10px;
+        font: 12px/1.45 ui-monospace, "SF Mono", Menlo, monospace;
+        white-space: pre;
+        overflow: auto;
+      }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      button {
+        background: #238636;
+        color: #fff;
+        border: 0;
+        border-radius: 6px;
+        padding: 8px 14px;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button.secondary { background: #21262d; border: 1px solid #30363d; }
+      button:disabled { opacity: 0.5; cursor: default; }
+      #status { font-size: 13px; min-height: 20px; }
+      #status.err { color: #f85149; }
+      #status.ok { color: #3fb950; }
+      .canvas-wrap {
+        background: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 8px;
+        padding: 10px;
+      }
+      canvas { width: 100%; height: auto; display: block; background: #0e1116; border-radius: 6px; }
+      .legend { margin-top: 8px; display: flex; gap: 16px; color: #8b949e; font-size: 12px; }
+      .swatch { display: inline-block; width: 12px; height: 3px; vertical-align: middle; }
+      label.check { color: #8b949e; font-size: 13px; user-select: none; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>str8 — paste a GeoJSON polygon</h1>
+      <p>
+        Accepts a <code>Polygon</code>, <code>MultiPolygon</code>,
+        <code>Feature</code>, <code>FeatureCollection</code>, or a bare
+        coordinates array. Winding order is normalized automatically.
+      </p>
+    </header>
+
+    <main>
+      <div class="panel">
+        <textarea id="input" spellcheck="false"></textarea>
+        <div class="row">
+          <button id="run">Compute skeleton</button>
+          <button id="sample" class="secondary">Load sample</button>
+          <label class="check"><input type="checkbox" id="invertY" /> flip Y (screen coords)</label>
+        </div>
+        <div id="status"></div>
+      </div>
+
+      <div class="canvas-wrap">
+        <canvas id="c" width="900" height="900"></canvas>
+        <div class="legend">
+          <span><span class="swatch" style="background:#58a6ff"></span> polygon</span>
+          <span><span class="swatch" style="background:#f78166"></span> skeleton</span>
+          <span>node colour = wavefront time</span>
+        </div>
+      </div>
+    </main>
+
+    <script type="module">
+      import { init, buildFromPolygon } from '../dist/str8.js';
+
+      const $ = (id) => document.getElementById(id);
+      const input = $('input');
+      const status = $('status');
+      const canvas = $('c');
+      const ctx = canvas.getContext('2d');
+
+      const SAMPLE = {
+        type: 'FeatureCollection',
+        features: [
+          {
+            type: 'Feature',
+            properties: { name: 'L-shape with a hole' },
+            geometry: {
+              type: 'Polygon',
+              coordinates: [
+                [[0, 0], [8, 0], [8, 3], [3, 3], [3, 8], [0, 8], [0, 0]],
+                [[1, 1], [1, 2], [2, 2], [2, 1], [1, 1]],
+              ],
+            },
+          },
+          {
+            type: 'Feature',
+            properties: { name: 'triangle' },
+            geometry: {
+              type: 'Polygon',
+              coordinates: [[[10, 0], [16, 0], [13, 6]]],
+            },
+          },
+        ],
+      };
+
+      input.value = JSON.stringify(SAMPLE, null, 2);
+
+      // Pull every polygon (array of rings) out of any GeoJSON-ish input.
+      function extractPolygons(data) {
+        const polys = [];
+        const fromGeometry = (g) => {
+          if (!g || typeof g !== 'object') return;
+          if (g.type === 'Polygon') polys.push(g.coordinates);
+          else if (g.type === 'MultiPolygon') for (const p of g.coordinates) polys.push(p);
+          else if (g.type === 'GeometryCollection') (g.geometries || []).forEach(fromGeometry);
+        };
+
+        if (Array.isArray(data)) {
+          // Bare coordinates: either rings ([[ [x,y] ]]) for one polygon.
+          polys.push(data);
+        } else if (data && data.type === 'FeatureCollection') {
+          (data.features || []).forEach((f) => fromGeometry(f && f.geometry));
+        } else if (data && data.type === 'Feature') {
+          fromGeometry(data.geometry);
+        } else {
+          fromGeometry(data);
+        }
+        return polys;
+      }
+
+      function setStatus(msg, kind) {
+        status.textContent = msg;
+        status.className = kind || '';
+      }
+
+      let ready = false;
+      init().then(() => {
+        ready = true;
+        setStatus('WASM loaded — ready.', 'ok');
+        run();
+      });
+
+      function run() {
+        if (!ready) {
+          setStatus('Loading WASM…');
+          return;
+        }
+
+        let data;
+        try {
+          data = JSON.parse(input.value);
+        } catch (e) {
+          setStatus(`Invalid JSON: ${e.message}`, 'err');
+          return;
+        }
+
+        const polygons = extractPolygons(data);
+        if (polygons.length === 0) {
+          setStatus('No Polygon / MultiPolygon found in that GeoJSON.', 'err');
+          return;
+        }
+
+        const flipY = $('invertY').checked;
+
+        // Compute skeletons + collect world bounds across everything we draw.
+        const results = [];
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        const see = (x, y) => {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+        };
+
+        let okCount = 0;
+        for (const rings of polygons) {
+          for (const ring of rings) for (const [x, y] of ring) see(x, y);
+          const skel = buildFromPolygon(rings);
+          if (skel) okCount++;
+          results.push({ rings, skel });
+        }
+
+        if (!isFinite(minX)) {
+          setStatus('Polygon had no coordinates.', 'err');
+          return;
+        }
+
+        // World -> canvas transform, fit with padding, preserve aspect ratio.
+        const W = canvas.width, H = canvas.height, pad = 30;
+        const spanX = maxX - minX || 1;
+        const spanY = maxY - minY || 1;
+        const scale = Math.min((W - pad * 2) / spanX, (H - pad * 2) / spanY);
+        const ox = (W - spanX * scale) / 2;
+        const oy = (H - spanY * scale) / 2;
+        const tx = (x) => ox + (x - minX) * scale;
+        const ty = (y) => {
+          const v = oy + (y - minY) * scale;
+          return flipY ? v : H - v; // default: math Y-up; flip for screen coords
+        };
+
+        ctx.clearRect(0, 0, W, H);
+
+        // Global max time for node colouring.
+        let maxTime = 0;
+        for (const { skel } of results) {
+          if (!skel) continue;
+          for (let i = 2; i < skel.vertices.length; i += 3)
+            maxTime = Math.max(maxTime, skel.vertices[i]);
+        }
+
+        // Skeleton edges.
+        ctx.strokeStyle = '#f78166';
+        ctx.lineWidth = 1;
+        for (const { skel } of results) {
+          if (!skel) continue;
+          const v = skel.vertices;
+          for (const face of skel.faces) {
+            ctx.beginPath();
+            face.forEach((idx, k) => {
+              const j = idx * 3;
+              const px = tx(v[j]), py = ty(v[j + 1]);
+              k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+            });
+            ctx.closePath();
+            ctx.stroke();
+          }
+        }
+
+        // Polygon outlines.
+        ctx.strokeStyle = '#58a6ff';
+        ctx.lineWidth = 2;
+        for (const { rings } of results) {
+          for (const ring of rings) {
+            ctx.beginPath();
+            ring.forEach(([x, y], k) => {
+              const px = tx(x), py = ty(y);
+              k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+            });
+            ctx.closePath();
+            ctx.stroke();
+          }
+        }
+
+        // Skeleton nodes coloured by time.
+        for (const { skel } of results) {
+          if (!skel) continue;
+          const v = skel.vertices;
+          for (let i = 0; i < v.length; i += 3) {
+            const t = maxTime ? v[i + 2] / maxTime : 0;
+            ctx.fillStyle = `hsl(${200 - t * 160} 80% 60%)`;
+            ctx.beginPath();
+            ctx.arc(tx(v[i]), ty(v[i + 1]), 2.5, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+
+        const failed = results.length - okCount;
+        setStatus(
+          `${okCount}/${results.length} polygon(s) skeletonized` +
+            (failed ? ` — ${failed} failed (self-intersecting or invalid?)` : '') +
+            `.`,
+          failed ? 'err' : 'ok',
+        );
+      }
+
+      $('run').addEventListener('click', run);
+      $('invertY').addEventListener('change', run);
+      $('sample').addEventListener('click', () => {
+        input.value = JSON.stringify(SAMPLE, null, 2);
+        run();
+      });
+    </script>
+  </body>
+</html>
