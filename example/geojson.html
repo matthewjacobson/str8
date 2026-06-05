@@ -7,28 +7,33 @@
     <style>
       :root { color-scheme: dark; }
       * { box-sizing: border-box; }
+      html, body { height: 100%; }
       body {
         margin: 0;
         font: 14px/1.5 system-ui, sans-serif;
         background: #0e1116;
         color: #e6edf3;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
       }
-      header { padding: 16px 20px; border-bottom: 1px solid #30363d; }
+      header { padding: 14px 20px; border-bottom: 1px solid #30363d; flex: none; }
       h1 { font-size: 16px; margin: 0; }
       header p { margin: 4px 0 0; color: #8b949e; font-size: 13px; }
       main {
+        flex: 1;
+        min-height: 0;
         display: grid;
         grid-template-columns: 380px 1fr;
         gap: 16px;
         padding: 16px 20px;
-        align-items: start;
       }
-      @media (max-width: 820px) { main { grid-template-columns: 1fr; } }
-      .panel { display: flex; flex-direction: column; gap: 10px; }
+      .panel { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
       textarea {
+        flex: 1;
         width: 100%;
-        height: 360px;
-        resize: vertical;
+        min-height: 120px;
+        resize: none;
         background: #161b22;
         color: #e6edf3;
         border: 1px solid #30363d;
@@ -38,7 +43,7 @@
         white-space: pre;
         overflow: auto;
       }
-      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; flex: none; }
       button {
         background: #238636;
         color: #fff;
@@ -51,19 +56,67 @@
       }
       button.secondary { background: #21262d; border: 1px solid #30363d; }
       button:disabled { opacity: 0.5; cursor: default; }
-      #status { font-size: 13px; min-height: 20px; }
+      #status { font-size: 13px; min-height: 20px; flex: none; }
       #status.err { color: #f85149; }
       #status.ok { color: #3fb950; }
+
       .canvas-wrap {
+        position: relative;
         background: #161b22;
         border: 1px solid #30363d;
         border-radius: 8px;
-        padding: 10px;
+        min-height: 0;
+        overflow: hidden;
       }
-      canvas { width: 100%; height: auto; display: block; background: #0e1116; border-radius: 6px; }
-      .legend { margin-top: 8px; display: flex; gap: 16px; color: #8b949e; font-size: 12px; }
+      canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+        background: #0e1116;
+        cursor: grab;
+        touch-action: none;
+      }
+      canvas.dragging { cursor: grabbing; }
+
+      /* Overlay controls */
+      .overlay { position: absolute; display: flex; gap: 6px; }
+      .overlay.tl { top: 10px; left: 10px; flex-direction: column; }
+      .overlay.br {
+        right: 10px; bottom: 10px;
+        background: rgba(13, 17, 23, 0.72);
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        padding: 6px 10px;
+        gap: 14px;
+        color: #8b949e;
+        font-size: 12px;
+        align-items: center;
+      }
       .swatch { display: inline-block; width: 12px; height: 3px; vertical-align: middle; }
+      .zoom-btn {
+        width: 34px; height: 34px; padding: 0;
+        font-size: 18px; line-height: 1;
+        background: rgba(22, 27, 34, 0.9);
+        border: 1px solid #30363d;
+        color: #e6edf3;
+        border-radius: 6px;
+      }
+      .zoom-btn.wide { width: auto; padding: 0 10px; font-size: 13px; font-weight: 600; }
+      .hint {
+        position: absolute; top: 10px; right: 10px;
+        color: #6e7681; font-size: 12px;
+        background: rgba(13, 17, 23, 0.72);
+        border: 1px solid #30363d; border-radius: 6px;
+        padding: 4px 8px; pointer-events: none;
+      }
       label.check { color: #8b949e; font-size: 13px; user-select: none; }
+
+      @media (max-width: 820px) {
+        body { overflow: auto; }
+        main { grid-template-columns: 1fr; }
+        .panel { min-height: 320px; }
+        .canvas-wrap { height: 70vh; }
+      }
     </style>
   </head>
   <body>
@@ -87,12 +140,21 @@
         <div id="status"></div>
       </div>
 
-      <div class="canvas-wrap">
-        <canvas id="c" width="900" height="900"></canvas>
-        <div class="legend">
+      <div class="canvas-wrap" id="wrap">
+        <canvas id="c"></canvas>
+
+        <div class="overlay tl">
+          <button class="zoom-btn" id="zin" title="Zoom in">+</button>
+          <button class="zoom-btn" id="zout" title="Zoom out">−</button>
+          <button class="zoom-btn wide" id="fit" title="Fit to view">Fit</button>
+        </div>
+
+        <div class="hint">scroll to zoom · drag to pan · double-click to fit</div>
+
+        <div class="overlay br">
           <span><span class="swatch" style="background:#58a6ff"></span> polygon</span>
           <span><span class="swatch" style="background:#f78166"></span> skeleton</span>
-          <span>node colour = wavefront time</span>
+          <span>node colour = time</span>
         </div>
       </div>
     </main>
@@ -123,17 +185,14 @@
           {
             type: 'Feature',
             properties: { name: 'triangle' },
-            geometry: {
-              type: 'Polygon',
-              coordinates: [[[10, 0], [16, 0], [13, 6]]],
-            },
+            geometry: { type: 'Polygon', coordinates: [[[10, 0], [16, 0], [13, 6]]] },
           },
         ],
       };
 
       input.value = JSON.stringify(SAMPLE, null, 2);
 
-      // Pull every polygon (array of rings) out of any GeoJSON-ish input.
+      // ---- GeoJSON extraction --------------------------------------------
       function extractPolygons(data) {
         const polys = [];
         const fromGeometry = (g) => {
@@ -142,17 +201,11 @@
           else if (g.type === 'MultiPolygon') for (const p of g.coordinates) polys.push(p);
           else if (g.type === 'GeometryCollection') (g.geometries || []).forEach(fromGeometry);
         };
-
-        if (Array.isArray(data)) {
-          // Bare coordinates: either rings ([[ [x,y] ]]) for one polygon.
-          polys.push(data);
-        } else if (data && data.type === 'FeatureCollection') {
+        if (Array.isArray(data)) polys.push(data);
+        else if (data && data.type === 'FeatureCollection')
           (data.features || []).forEach((f) => fromGeometry(f && f.geometry));
-        } else if (data && data.type === 'Feature') {
-          fromGeometry(data.geometry);
-        } else {
-          fromGeometry(data);
-        }
+        else if (data && data.type === 'Feature') fromGeometry(data.geometry);
+        else fromGeometry(data);
         return polys;
       }
 
@@ -161,18 +214,106 @@
         status.className = kind || '';
       }
 
+      // ---- Scene + camera -------------------------------------------------
+      // scene: computed geometry to draw, in world coordinates.
+      // cam: world -> screen (CSS px):  sx = ox + wx*scale,  sy = oy + wy*scale*ySign
+      let scene = null;
+      const cam = { scale: 1, ox: 0, oy: 0, ySign: -1 };
+      let viewDirty = false; // true once the user has panned/zoomed since last fit
+      let dpr = 1;
+
+      // Size the backing store to the element's CSS size × devicePixelRatio.
+      function sizeCanvas() {
+        dpr = window.devicePixelRatio || 1;
+        const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
+        const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
+      }
+
+      function fitView() {
+        if (!scene) return;
+        const W = canvas.clientWidth, H = canvas.clientHeight, pad = 30;
+        const { minX, minY, maxX, maxY } = scene.bounds;
+        const spanX = maxX - minX || 1;
+        const spanY = maxY - minY || 1;
+        cam.scale = Math.min((W - pad * 2) / spanX, (H - pad * 2) / spanY);
+        const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+        cam.ox = W / 2 - cx * cam.scale;
+        cam.oy = H / 2 - cy * cam.scale * cam.ySign;
+        viewDirty = false;
+      }
+
+      function draw() {
+        sizeCanvas();
+        const W = canvas.clientWidth, H = canvas.clientHeight;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // work in CSS pixels; crisp on HiDPI
+        ctx.clearRect(0, 0, W, H);
+        if (!scene) return;
+
+        const sx = (x) => cam.ox + x * cam.scale;
+        const sy = (y) => cam.oy + y * cam.scale * cam.ySign;
+        const { results, maxTime } = scene;
+
+        // Skeleton edges.
+        ctx.strokeStyle = '#f78166';
+        ctx.lineWidth = 1;
+        for (const { skel } of results) {
+          if (!skel) continue;
+          const v = skel.vertices;
+          for (const face of skel.faces) {
+            ctx.beginPath();
+            face.forEach((idx, k) => {
+              const j = idx * 3;
+              const px = sx(v[j]), py = sy(v[j + 1]);
+              k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+            });
+            ctx.closePath();
+            ctx.stroke();
+          }
+        }
+
+        // Polygon outlines.
+        ctx.strokeStyle = '#58a6ff';
+        ctx.lineWidth = 2;
+        for (const { rings } of results) {
+          for (const ring of rings) {
+            ctx.beginPath();
+            ring.forEach(([x, y], k) => {
+              const px = sx(x), py = sy(y);
+              k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
+            });
+            ctx.closePath();
+            ctx.stroke();
+          }
+        }
+
+        // Skeleton nodes coloured by wavefront time (constant screen size).
+        for (const { skel } of results) {
+          if (!skel) continue;
+          const v = skel.vertices;
+          for (let i = 0; i < v.length; i += 3) {
+            const t = maxTime ? v[i + 2] / maxTime : 0;
+            ctx.fillStyle = `hsl(${200 - t * 160} 80% 60%)`;
+            ctx.beginPath();
+            ctx.arc(sx(v[i]), sy(v[i + 1]), 2.5, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+      }
+
+      // ---- Compute --------------------------------------------------------
       let ready = false;
       init().then(() => {
         ready = true;
         setStatus('WASM loaded — ready.', 'ok');
-        run();
+        compute();
       });
 
-      function run() {
-        if (!ready) {
-          setStatus('Loading WASM…');
-          return;
-        }
+      function compute() {
+        if (!ready) { setStatus('Loading WASM…'); return; }
 
         let data;
         try {
@@ -188,47 +329,23 @@
           return;
         }
 
-        const flipY = $('invertY').checked;
+        cam.ySign = $('invertY').checked ? 1 : -1;
 
-        // Compute skeletons + collect world bounds across everything we draw.
         const results = [];
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        const see = (x, y) => {
-          if (x < minX) minX = x;
-          if (y < minY) minY = y;
-          if (x > maxX) maxX = x;
-          if (y > maxY) maxY = y;
-        };
-
         let okCount = 0;
         for (const rings of polygons) {
-          for (const ring of rings) for (const [x, y] of ring) see(x, y);
+          for (const ring of rings) for (const [x, y] of ring) {
+            if (x < minX) minX = x; if (y < minY) minY = y;
+            if (x > maxX) maxX = x; if (y > maxY) maxY = y;
+          }
           const skel = buildFromPolygon(rings);
           if (skel) okCount++;
           results.push({ rings, skel });
         }
 
-        if (!isFinite(minX)) {
-          setStatus('Polygon had no coordinates.', 'err');
-          return;
-        }
+        if (!isFinite(minX)) { setStatus('Polygon had no coordinates.', 'err'); return; }
 
-        // World -> canvas transform, fit with padding, preserve aspect ratio.
-        const W = canvas.width, H = canvas.height, pad = 30;
-        const spanX = maxX - minX || 1;
-        const spanY = maxY - minY || 1;
-        const scale = Math.min((W - pad * 2) / spanX, (H - pad * 2) / spanY);
-        const ox = (W - spanX * scale) / 2;
-        const oy = (H - spanY * scale) / 2;
-        const tx = (x) => ox + (x - minX) * scale;
-        const ty = (y) => {
-          const v = oy + (y - minY) * scale;
-          return flipY ? v : H - v; // default: math Y-up; flip for screen coords
-        };
-
-        ctx.clearRect(0, 0, W, H);
-
-        // Global max time for node colouring.
         let maxTime = 0;
         for (const { skel } of results) {
           if (!skel) continue;
@@ -236,67 +353,87 @@
             maxTime = Math.max(maxTime, skel.vertices[i]);
         }
 
-        // Skeleton edges.
-        ctx.strokeStyle = '#f78166';
-        ctx.lineWidth = 1;
-        for (const { skel } of results) {
-          if (!skel) continue;
-          const v = skel.vertices;
-          for (const face of skel.faces) {
-            ctx.beginPath();
-            face.forEach((idx, k) => {
-              const j = idx * 3;
-              const px = tx(v[j]), py = ty(v[j + 1]);
-              k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
-            });
-            ctx.closePath();
-            ctx.stroke();
-          }
-        }
-
-        // Polygon outlines.
-        ctx.strokeStyle = '#58a6ff';
-        ctx.lineWidth = 2;
-        for (const { rings } of results) {
-          for (const ring of rings) {
-            ctx.beginPath();
-            ring.forEach(([x, y], k) => {
-              const px = tx(x), py = ty(y);
-              k === 0 ? ctx.moveTo(px, py) : ctx.lineTo(px, py);
-            });
-            ctx.closePath();
-            ctx.stroke();
-          }
-        }
-
-        // Skeleton nodes coloured by time.
-        for (const { skel } of results) {
-          if (!skel) continue;
-          const v = skel.vertices;
-          for (let i = 0; i < v.length; i += 3) {
-            const t = maxTime ? v[i + 2] / maxTime : 0;
-            ctx.fillStyle = `hsl(${200 - t * 160} 80% 60%)`;
-            ctx.beginPath();
-            ctx.arc(tx(v[i]), ty(v[i + 1]), 2.5, 0, Math.PI * 2);
-            ctx.fill();
-          }
-        }
+        scene = { results, bounds: { minX, minY, maxX, maxY }, maxTime };
+        fitView();
+        draw();
 
         const failed = results.length - okCount;
         setStatus(
           `${okCount}/${results.length} polygon(s) skeletonized` +
-            (failed ? ` — ${failed} failed (self-intersecting or invalid?)` : '') +
-            `.`,
+            (failed ? ` — ${failed} failed (self-intersecting or invalid?)` : '') + `.`,
           failed ? 'err' : 'ok',
         );
       }
 
-      $('run').addEventListener('click', run);
-      $('invertY').addEventListener('change', run);
+      // ---- Interaction: zoom + pan ---------------------------------------
+      function pointerPos(e) {
+        const r = canvas.getBoundingClientRect();
+        return { x: e.clientX - r.left, y: e.clientY - r.top };
+      }
+
+      // Zoom by `factor` keeping the world point under (mx,my) fixed on screen.
+      function zoomAt(mx, my, factor) {
+        const wx = (mx - cam.ox) / cam.scale;
+        const wy = (my - cam.oy) / (cam.scale * cam.ySign);
+        cam.scale *= factor;
+        cam.ox = mx - wx * cam.scale;
+        cam.oy = my - wy * cam.scale * cam.ySign;
+        viewDirty = true;
+        draw();
+      }
+
+      canvas.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const { x, y } = pointerPos(e);
+        // Trackpads/mice vary; exp keeps zoom smooth and symmetric.
+        zoomAt(x, y, Math.exp(-e.deltaY * 0.0015));
+      }, { passive: false });
+
+      let dragging = false, lastX = 0, lastY = 0;
+      canvas.addEventListener('pointerdown', (e) => {
+        dragging = true;
+        canvas.classList.add('dragging');
+        canvas.setPointerCapture(e.pointerId);
+        lastX = e.clientX; lastY = e.clientY;
+      });
+      canvas.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        cam.ox += e.clientX - lastX;
+        cam.oy += e.clientY - lastY;
+        lastX = e.clientX; lastY = e.clientY;
+        viewDirty = true;
+        draw();
+      });
+      const endDrag = (e) => {
+        if (!dragging) return;
+        dragging = false;
+        canvas.classList.remove('dragging');
+        try { canvas.releasePointerCapture(e.pointerId); } catch {}
+      };
+      canvas.addEventListener('pointerup', endDrag);
+      canvas.addEventListener('pointercancel', endDrag);
+      canvas.addEventListener('dblclick', () => { fitView(); draw(); });
+
+      // ---- Controls + resize ---------------------------------------------
+      const centerZoom = (f) => zoomAt(canvas.clientWidth / 2, canvas.clientHeight / 2, f);
+      $('zin').addEventListener('click', () => centerZoom(1.25));
+      $('zout').addEventListener('click', () => centerZoom(1 / 1.25));
+      $('fit').addEventListener('click', () => { fitView(); draw(); });
+
+      $('run').addEventListener('click', compute);
+      $('invertY').addEventListener('change', compute);
       $('sample').addEventListener('click', () => {
         input.value = JSON.stringify(SAMPLE, null, 2);
-        run();
+        compute();
       });
+
+      // Keep the canvas sized to its container. Refit only if the user hasn't
+      // taken control of the view yet (so a resize doesn't undo a zoom/pan).
+      new ResizeObserver(() => {
+        sizeCanvas();
+        if (scene && !viewDirty) fitView();
+        draw();
+      }).observe($('wrap'));
     </script>
   </body>
 </html>
