@@ -129,7 +129,7 @@ DEPS_INCLUDE_DIR=/usr/local/include npm run build:wasm
 
 ## Examples
 
-Two static demos live in `example/` — serve the repo root over HTTP (e.g.
+Static demos live in `example/` — serve the repo root over HTTP (e.g.
 `npx serve` or `python3 -m http.server`) and open them:
 
 - `example/index.html` — a **gallery** with a dropdown of 28 sample polygons
@@ -144,7 +144,7 @@ Two static demos live in `example/` — serve the repo root over HTTP (e.g.
   `time`, rendered with [three.js](https://threejs.org/) (orbit, adjustable
   pitch). three.js is loaded from a CDN, so this page needs network access.
 
-Both import the built `dist/str8.js`, so run `npm run build` first.
+They import the built `dist/str8.js`, so run `npm run build` first.
 
 ## How it works
 
