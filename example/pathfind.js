@@ -142,7 +142,7 @@ function dijkstra(adj, start, goal) {
  *               (default true). Set false for the naive nearest-edge attach.
  * @returns      Array of {x,y,t} path points, or null if disconnected.
  */
-export function findCentralPath(skel, rings, A, B, { alpha = 1, visibility = true, attachMode = 'edge' } = {}) {
+export function findCentralPath(skel, rings, A, B, { alpha = 1, visibility = true, attachMode = 'edge', goalWeighted = true } = {}) {
   const { nodes, edges } = buildSkeletonGraph(skel);
   if (edges.length === 0) return null;
   const baseN = nodes.length; // skeleton-vertex count, before temp nodes
@@ -170,11 +170,15 @@ export function findCentralPath(skel, rings, A, B, { alpha = 1, visibility = tru
   // Attach a query point to the graph. Gather candidate attachment points
   // (projections onto each skeleton edge + interior skeleton nodes), then pick
   // the nearest one whose straight connector to P stays inside the polygon.
-  function attach(P0) {
+  function attach(P0, goal0) {
     const P = clampInside(rings, P0);
+    const goal = goal0 ? clampInside(rings, goal0) : null;
 
     // Face-node mode: jump to the best visible skeleton node of the face that
     // actually contains P (its local spine), instead of the nearest edge point.
+    // "Best" = the visible face node that best continues toward the goal:
+    // minimize dist(P, node) + dist(node, goal), so the entry heads the right
+    // way instead of backtracking. Falls back to nearest when no goal is given.
     if (attachMode === 'faceNode') {
       const face = faceContaining(P);
       if (face) {
@@ -182,9 +186,10 @@ export function findCentralPath(skel, rings, A, B, { alpha = 1, visibility = tru
         for (const idx of face) {
           if (nodes[idx].t <= EPS_TIME) continue; // skip the face's boundary corners
           const d = dist2d(P.x, P.y, nodes[idx].x, nodes[idx].y);
-          if (best && d >= best.d) continue;
+          const score = goal && goalWeighted ? d + dist2d(nodes[idx].x, nodes[idx].y, goal.x, goal.y) : d;
+          if (best && score >= best.score) continue;
           if (visibility && !segmentInside(rings, P, nodes[idx])) continue;
-          best = { idx, d };
+          best = { idx, d, score };
         }
         if (best) {
           const pid = nodes.length;
@@ -230,7 +235,7 @@ export function findCentralPath(skel, rings, A, B, { alpha = 1, visibility = tru
     return pid;
   }
 
-  const path = dijkstra(adj, attach(A), attach(B));
+  const path = dijkstra(adj, attach(A, B), attach(B, A));
   return path ? path.map((i) => ({ x: nodes[i].x, y: nodes[i].y, t: nodes[i].t })) : null;
 }
 
