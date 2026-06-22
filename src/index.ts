@@ -394,6 +394,22 @@ export interface OffsetPolygon {
   holes: Float32Array[];
 }
 
+/** The result of {@link offsetPolygon}: the shared skeleton plus per-distance contours. */
+export interface OffsetResult {
+  /**
+   * The straight skeleton the offsets were derived from (interior, or — with
+   * `{ exterior: true }` — exterior). Computed once and shared by every
+   * distance, so it's returned for free if you also want to draw it.
+   */
+  skeleton: Skeleton;
+  /**
+   * One contour set per requested distance: `contours[i]` holds the offset
+   * polygons at `distances[i]`. A set may be empty (the offset eroded to
+   * nothing, or grew past the frame).
+   */
+  contours: OffsetPolygon[][];
+}
+
 export interface OffsetOptions extends BuildOptions {
   /**
    * `false` (default) insets the polygon inward; `true` outsets it (the
@@ -403,23 +419,32 @@ export interface OffsetOptions extends BuildOptions {
 }
 
 /**
- * Offset (inset or outset) a polygon by `distance`, via the straight skeleton.
+ * Offset (inset or outset) a polygon by each of several `distances`, via the
+ * straight skeleton.
+ *
+ * The skeleton is built **once** and reused for every distance — recomputing it
+ * per distance (e.g. for concentric contours) is the dominant cost, so passing
+ * all distances together is far faster than calling once per distance.
  *
  * An inset can split into several disjoint pieces (or vanish entirely past the
- * polygon's max inradius), so the result is an *array* of contours. Each
- * contour is an `{ outer, holes }` polygon.
+ * polygon's max inradius), so each distance's result is an *array* of `{ outer,
+ * holes }` contours (possibly empty). The shared skeleton is returned too.
  *
- * @param distance How far to offset. Must be > 0.
- * @returns The offset contours (possibly empty), or `null` on CGAL failure.
+ * @param distances How far to offset, one or more values. Each must be > 0.
+ * @returns `{ skeleton, contours }` where `contours[i]` matches `distances[i]`,
+ *   or `null` if the input is degenerate or CGAL fails.
  */
 export function offsetPolygon(
   rings: Rings,
-  distance: number,
+  distances: number[],
   options: OffsetOptions = {},
-): OffsetPolygon[] | null {
+): OffsetResult | null {
   const m = ensureReady();
-  if (!(distance > 0)) {
-    throw new Error('str8: offsetPolygon requires distance > 0.');
+  if (!Array.isArray(distances) || distances.length === 0) {
+    throw new Error('str8: offsetPolygon requires a non-empty array of distances.');
+  }
+  if (!distances.every((d) => d > 0)) {
+    throw new Error('str8: offsetPolygon requires every distance > 0.');
   }
   // An interior offset consumes the holes (so touching holes are invalid); an
   // exterior offset only uses the outer boundary, so holes are irrelevant.
@@ -428,7 +453,7 @@ export function offsetPolygon(
   return m.offsetPolygons(
     flat.coords,
     flat.sizes,
-    distance,
+    distances,
     options.exterior ?? false,
     options.forceExact ?? false,
   );

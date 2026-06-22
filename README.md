@@ -79,7 +79,7 @@ const results = buildFromGeoJSON({
 | `buildFromPolygon(rings, opts?): Skeleton \| null` | Interior skeleton of a polygon. Ring 0 is the outer boundary; the rest are holes. |
 | `buildFromGeoJSON(geometry, opts?): (Skeleton \| null)[]` | Interior skeletons from a GeoJSON `Polygon` / `MultiPolygon`. |
 | `buildExteriorSkeleton(rings, { maxOffset }): Skeleton \| null` | Exterior skeleton, framed `maxOffset` beyond the polygon. |
-| `offsetPolygon(rings, distance, opts?): OffsetPolygon[] \| null` | Inset (default) or outset (`{ exterior: true }`) offset contours. |
+| `offsetPolygon(rings, distances, opts?): OffsetResult \| null` | Inset (default) or outset (`{ exterior: true }`) offset contours for each distance, plus the shared skeleton. |
 
 ```ts
 interface Skeleton {
@@ -91,11 +91,29 @@ interface OffsetPolygon {
   outer: Float32Array;    // [x, y, ...]
   holes: Float32Array[];  // each [x, y, ...]
 }
+
+interface OffsetResult {
+  skeleton: Skeleton;        // the skeleton the offsets were derived from
+  contours: OffsetPolygon[][]; // contours[i] is the offset at distances[i]
+}
 ```
 
+`offsetPolygon` takes an **array of distances** and builds the straight skeleton
+**once**, then derives every offset from it. Recomputing the skeleton per
+distance is the dominant cost — for concentric contours, passing all distances
+together is several times faster than one call per distance (≈5× for eight
+rings). The skeleton is returned alongside the contours, so you can draw it for
+free.
+
 An inset can split into several pieces or vanish past the polygon's max
-inradius, so `offsetPolygon` returns an *array* of contours (possibly empty).
-All builders accept `{ forceExact: true }` to skip the fast kernel (see below).
+inradius, so each distance's entry in `contours` is an *array* of contours
+(possibly empty). `contours[i]` corresponds to `distances[i]`. All builders
+accept `{ forceExact: true }` to skip the fast kernel (see below).
+
+```ts
+const { skeleton, contours } = offsetPolygon(rings, [10, 20, 30]);
+// contours[0] = inset by 10, contours[1] = by 20, contours[2] = by 30
+```
 
 ### Input handling (modernizations over the original)
 

@@ -21,13 +21,20 @@ export interface SkeletonModule {
     forceExact: boolean,
   ): { vertices: Float32Array; faces: number[][] } | null;
 
+  /**
+   * Build the straight skeleton once and derive an offset contour set for each
+   * distance. `contours[i]` corresponds to `distances[i]`.
+   */
   offsetPolygons(
     rings: ArrayLike<number>,
     ringSizes: ArrayLike<number>,
-    distance: number,
+    distances: ArrayLike<number>,
     exterior: boolean,
     forceExact: boolean,
-  ): { outer: Float32Array; holes: Float32Array[] }[] | null;
+  ): {
+    skeleton: { vertices: Float32Array; faces: number[][] };
+    contours: { outer: Float32Array; holes: Float32Array[] }[][];
+  } | null;
 }
 
 declare const createSkeletonModule: (

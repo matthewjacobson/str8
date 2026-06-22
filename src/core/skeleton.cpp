@@ -27,6 +27,10 @@
 #include <CGAL/create_straight_skeleton_from_polygon_with_holes_2.h>
 #include <CGAL/create_offset_polygons_2.h>
 #include <CGAL/create_offset_polygons_from_polygon_with_holes_2.h>
+#include <CGAL/arrange_offset_polygons_2.h>
+
+#include <algorithm>
+#include <cmath>
 
 using namespace emscripten;
 
@@ -173,21 +177,80 @@ static val exterior_skeleton(const std::vector<double>& coords, int outerCount, 
   return val::null();
 }
 
+// Arrange a set of raw offset contours into {outer, holes} polygons-with-holes
+// and serialize them. For the exterior case, CGAL drops the bounding-frame
+// contour and flips the orientation of the rest before arranging; we replicate
+// that here so a reused exterior skeleton produces the same nesting as the
+// one-shot create_exterior_skeleton_and_offset_polygons_with_holes_2 would.
 template <class K>
-static val offsets(const std::vector<double>& coords, const std::vector<int>& sizes,
-                   double distance, bool exterior) {
-  try {
-    if (exterior) {
-      // Exterior offsetting concerns the outer boundary; the with-holes variant
-      // already strips the bounding frame from its result.
-      auto pwh = make_pwh<K>(coords, sizes, false);
-      return serialize_offsets<K>(
-          CGAL::create_exterior_skeleton_and_offset_polygons_with_holes_2(distance, pwh, K(), K()));
-    } else {
-      auto pwh = make_pwh<K>(coords, sizes, true);
-      return serialize_offsets<K>(
-          CGAL::create_interior_skeleton_and_offset_polygons_with_holes_2(distance, pwh, K(), K()));
+static val arrange_and_serialize(
+    std::vector<std::shared_ptr<CGAL::Polygon_2<K>>> raw, bool exterior) {
+  if (exterior && !raw.empty()) {
+    // The bounding frame's offset encloses everything, so it has the largest
+    // area; remove that single contour. (Positional ordering isn't reliable
+    // once the skeleton is built independently of the offset call.)
+    size_t frame = 0;
+    double maxArea = -1.0;
+    for (size_t i = 0; i < raw.size(); ++i) {
+      if (!raw[i]) continue;
+      double a = std::abs(CGAL::to_double(raw[i]->area()));
+      if (a > maxArea) { maxArea = a; frame = i; }
     }
+    raw.erase(raw.begin() + frame);
+    // Match CGAL: reverse all-but-first vertex of each remaining contour so the
+    // orientation is what arrange_offset_polygons_2 expects for exterior offsets.
+    for (auto& ptr : raw) {
+      if (ptr && ptr->size() > 1) std::reverse(std::next(ptr->begin()), ptr->end());
+    }
+  }
+  auto with_holes = CGAL::arrange_offset_polygons_2<CGAL::Polygon_with_holes_2<K>>(raw);
+  return serialize_offsets<K>(with_holes);
+}
+
+// Build the straight skeleton ONCE, then derive every requested offset from it.
+// Recomputing the skeleton per distance (the old one-shot path) is the dominant
+// cost when stepping concentric contours, so reuse is a large win there.
+// Returns { skeleton: {vertices, faces}, contours: [ [ {outer, holes}, ... ] ] }
+// where contours[i] holds the offset polygons at distances[i].
+template <class K>
+static val offsets_batch(const std::vector<double>& coords, const std::vector<int>& sizes,
+                         const std::vector<double>& distances, bool exterior) {
+  try {
+    val contours = val::array();
+    val skel;
+
+    if (exterior) {
+      // Exterior offsetting concerns only the outer boundary. The exterior
+      // skeleton is framed at a fixed distance, so frame it beyond the largest
+      // requested offset and reuse it for them all.
+      double maxd = 0.0;
+      for (double d : distances) maxd = std::max(maxd, d);
+      auto outer = read_ring<K>(coords, 0, sizes[0]);
+      auto ss = CGAL::create_exterior_straight_skeleton_2(maxd, outer, K());
+      if (!ss) return val::null();
+      skel = serialize_skeleton(ss);
+      for (size_t i = 0; i < distances.size(); ++i) {
+        contours.set(static_cast<int>(i),
+                     arrange_and_serialize<K>(
+                         CGAL::create_offset_polygons_2<CGAL::Polygon_2<K>>(distances[i], *ss, K()),
+                         true));
+      }
+    } else {
+      auto ss = CGAL::create_interior_straight_skeleton_2(make_pwh<K>(coords, sizes, true), K());
+      if (!ss) return val::null();
+      skel = serialize_skeleton(ss);
+      for (size_t i = 0; i < distances.size(); ++i) {
+        contours.set(static_cast<int>(i),
+                     arrange_and_serialize<K>(
+                         CGAL::create_offset_polygons_2<CGAL::Polygon_2<K>>(distances[i], *ss, K()),
+                         false));
+      }
+    }
+
+    val result = val::object();
+    result.set("skeleton", skel);
+    result.set("contours", contours);
+    return result;
   } catch (...) {}
   return val::null();
 }
@@ -220,16 +283,17 @@ val build_exterior_skeleton(val ringsVal, val ringSizesVal, double maxOffset, bo
   return exterior_skeleton<ExactK>(coords, sizes[0], maxOffset);
 }
 
-val offset_polygons(val ringsVal, val ringSizesVal, double distance, bool exterior, bool forceExact) {
-  const std::vector<double> coords = convertJSArrayToNumberVector<double>(ringsVal);
-  const std::vector<int>    sizes  = convertJSArrayToNumberVector<int>(ringSizesVal);
-  if (sizes.empty() || sizes[0] < 3 || distance <= 0) return val::null();
+val offset_polygons(val ringsVal, val ringSizesVal, val distancesVal, bool exterior, bool forceExact) {
+  const std::vector<double> coords    = convertJSArrayToNumberVector<double>(ringsVal);
+  const std::vector<int>    sizes     = convertJSArrayToNumberVector<int>(ringSizesVal);
+  const std::vector<double> distances = convertJSArrayToNumberVector<double>(distancesVal);
+  if (sizes.empty() || sizes[0] < 3 || distances.empty()) return val::null();
 
   if (!forceExact) {
-    val fast = offsets<InexactK>(coords, sizes, distance, exterior);
+    val fast = offsets_batch<InexactK>(coords, sizes, distances, exterior);
     if (!fast.isNull()) return fast;
   }
-  return offsets<ExactK>(coords, sizes, distance, exterior);
+  return offsets_batch<ExactK>(coords, sizes, distances, exterior);
 }
 
 EMSCRIPTEN_BINDINGS(str8) {

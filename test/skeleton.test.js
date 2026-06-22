@@ -225,8 +225,13 @@ test('buildExteriorSkeleton requires a positive maxOffset', async () => {
 
 test('interior offset insets, and erodes to nothing past the inradius', async () => {
   await init();
-  const inset = offsetPolygon(SQUARE, 20); // inradius is 50
-  assert.ok(inset);
+  const res = offsetPolygon(SQUARE, [20]); // inradius is 50
+  assert.ok(res);
+  // Always returns the shared skeleton alongside the contours.
+  assert.ok(res.skeleton.vertices instanceof Float32Array);
+  assert.ok(res.skeleton.faces.length >= 4);
+  assert.equal(res.contours.length, 1); // one contour set per requested distance
+  const inset = res.contours[0];
   assert.equal(inset.length, 1);
   assert.equal(inset[0].outer.length / 2, 4); // still a quad
   assert.equal(inset[0].holes.length, 0);
@@ -236,9 +241,42 @@ test('interior offset insets, and erodes to nothing past the inradius', async ()
   for (let i = 0; i < inset[0].outer.length; i += 2) xs.push(inset[0].outer[i]);
   assert.ok(Math.min(...xs) > 15 && Math.max(...xs) < 85);
 
-  const eroded = offsetPolygon(SQUARE, 60);
+  const eroded = offsetPolygon(SQUARE, [60]);
   assert.ok(eroded);
-  assert.equal(eroded.length, 0); // fully collapsed
+  assert.equal(eroded.contours[0].length, 0); // fully collapsed
+});
+
+test('one skeleton, several distances: each set is a tighter inset', async () => {
+  await init();
+  const res = offsetPolygon(SQUARE, [10, 20, 30, 40]);
+  assert.ok(res);
+  assert.equal(res.contours.length, 4);
+  // The skeleton is computed once and shared by all four distances.
+  const skelA = offsetPolygon(SQUARE, [10]).skeleton;
+  assert.equal(res.skeleton.faces.length, skelA.faces.length);
+
+  // Each successive inset is strictly smaller (its left edge moves inward).
+  const leftEdge = (set) => {
+    let min = Infinity;
+    for (let i = 0; i < set[0].outer.length; i += 2) min = Math.min(min, set[0].outer[i]);
+    return min;
+  };
+  for (let i = 1; i < res.contours.length; i++) {
+    assert.ok(res.contours[i][0], `distance ${i} produced a contour`);
+    assert.ok(leftEdge(res.contours[i]) > leftEdge(res.contours[i - 1]));
+  }
+
+  // A batched distance matches the same distance computed on its own.
+  const solo = offsetPolygon(SQUARE, [25]).contours[0];
+  const batched = offsetPolygon(SQUARE, [5, 25, 45]).contours[1];
+  const span = (set) => {
+    const xs = [];
+    for (let i = 0; i < set[0].outer.length; i += 2) xs.push(set[0].outer[i]);
+    return [Math.min(...xs), Math.max(...xs)];
+  };
+  const [s0, s1] = span(solo);
+  const [b0, b1] = span(batched);
+  assert.ok(Math.abs(s0 - b0) < 1e-3 && Math.abs(s1 - b1) < 1e-3);
 });
 
 test('interior offset of a polygon with a hole grows the hole', async () => {
@@ -247,16 +285,18 @@ test('interior offset of a polygon with a hole grows the hole', async () => {
     [[0, 0], [100, 0], [100, 100], [0, 100]],
     [[40, 40], [40, 60], [60, 60], [60, 40]],
   ];
-  const inset = offsetPolygon(withHole, 8);
-  assert.ok(inset);
+  const res = offsetPolygon(withHole, [8]);
+  assert.ok(res);
+  const inset = res.contours[0];
   assert.equal(inset.length, 1);
   assert.equal(inset[0].holes.length, 1);
 });
 
 test('exterior offset outsets the boundary', async () => {
   await init();
-  const out = offsetPolygon(SQUARE, 20, { exterior: true });
-  assert.ok(out);
+  const res = offsetPolygon(SQUARE, [20], { exterior: true });
+  assert.ok(res);
+  const out = res.contours[0];
   assert.ok(out.length >= 1);
   // The outset contour should extend beyond the original [0,100] bounds.
   const xs = [];
@@ -264,9 +304,28 @@ test('exterior offset outsets the boundary', async () => {
   assert.ok(Math.min(...xs) < 0 && Math.max(...xs) > 100);
 });
 
-test('offsetPolygon requires a positive distance', async () => {
+test('exterior offset batches several distances, each larger than the last', async () => {
   await init();
-  assert.throws(() => offsetPolygon(SQUARE, 0));
+  const res = offsetPolygon(SQUARE, [10, 25, 50], { exterior: true });
+  assert.ok(res);
+  assert.equal(res.contours.length, 3);
+  const reach = (set) => {
+    let max = -Infinity;
+    for (let i = 0; i < set[0].outer.length; i += 2) max = Math.max(max, set[0].outer[i]);
+    return max;
+  };
+  for (const set of res.contours) assert.ok(set.length >= 1);
+  // The frame contour is stripped, so each set is just the grown boundary,
+  // reaching farther out as the distance increases.
+  assert.ok(reach(res.contours[0]) < reach(res.contours[1]));
+  assert.ok(reach(res.contours[1]) < reach(res.contours[2]));
+});
+
+test('offsetPolygon rejects empty/invalid distance arrays', async () => {
+  await init();
+  assert.throws(() => offsetPolygon(SQUARE, []));
+  assert.throws(() => offsetPolygon(SQUARE, [0]));
+  assert.throws(() => offsetPolygon(SQUARE, [10, -5]));
 });
 
 // ---------------------------------------------------------------------------
