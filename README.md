@@ -141,6 +141,25 @@ The check runs for interior builds (`buildFromPolygon`, `buildFromGeoJSON`, and
 interior `offsetPolygon`). It is skipped for the exterior skeleton and exterior
 offset, which use only the outer boundary, so holes there are irrelevant.
 
+#### Auto-separating touching rings
+
+If you'd rather build than be rejected, pass `{ separateTouchingHoles: true }`.
+Instead of throwing, str8 nudges each hole's copy of a shared vertex a hair into
+that hole's interior — along the interior angle bisector, by ~1% of the shorter
+incident edge — so the rings become disjoint and the skeleton builds. The outer
+boundary is never moved; only holes retreat from it.
+
+```ts
+// the polygon's holes touch at a shared vertex
+buildFromPolygon(rings, { separateTouchingHoles: true });
+buildFromGeoJSON(geometry, { separateTouchingHoles: true });
+```
+
+This is a cheap, pure-JS pre-pass (no WASM cost) and perturbs the geometry only
+by a sub-percent of the local edge length. Like the validation it replaces, it
+acts on **coincident-vertex** touches only — not the vertex-on-edge or
+overlapping-edge cases below.
+
 **Limitation — only coincident vertices are detected.** The check flags two
 rings that share an identical vertex, which is by far the most common cause (for
 example, a shape sliced into pieces that reuse boundary coordinates). It does

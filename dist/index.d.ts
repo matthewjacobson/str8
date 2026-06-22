@@ -21,6 +21,18 @@ export interface BuildOptions {
      * this — set it if you want deterministic exact results up front.
      */
     forceExact?: boolean;
+    /**
+     * Instead of rejecting holes that touch at a shared vertex, nudge them apart
+     * a hair so they become disjoint and the skeleton can build. This is a
+     * cheap, pure-JS pre-pass that resolves the common case — holes (or a hole
+     * and the outer boundary) meeting at a coincident vertex, e.g. a shape
+     * sliced into pieces that reuse boundary coordinates.
+     *
+     * The nudge perturbs geometry by ~1% of the shorter incident edge near each
+     * touch. It handles *vertex* coincidences only; a vertex lying partway along
+     * another ring's edge (vertex-on-edge) is not addressed.
+     */
+    separateTouchingHoles?: boolean;
 }
 /**
  * Load and instantiate the WebAssembly module. Must be awaited once before any
@@ -39,8 +51,9 @@ export declare function isReady(): boolean;
  * @param rings   Outer ring first, then holes. See {@link Rings}.
  * @param options Optional build flags. See {@link BuildOptions}.
  * @returns The skeleton, or `null` if the input is degenerate or CGAL fails.
- * @throws If two rings touch (a hole touching another hole or the outer
- *   boundary), since CGAL requires the holes to be pairwise disjoint.
+ * @throws If two rings touch at a shared vertex (a hole touching another hole
+ *   or the outer boundary) — unless {@link BuildOptions.separateTouchingHoles}
+ *   is set, in which case the touch is nudged apart instead of rejected.
  */
 export declare function buildFromPolygon(rings: Rings, options?: BuildOptions): Skeleton | null;
 /**

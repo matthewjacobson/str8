@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import {
   init,
@@ -266,4 +267,66 @@ test('exterior offset outsets the boundary', async () => {
 test('offsetPolygon requires a positive distance', async () => {
   await init();
   assert.throws(() => offsetPolygon(SQUARE, 0));
+});
+
+// ---------------------------------------------------------------------------
+// separateTouchingHoles: nudge holes that share a vertex apart so they become
+// disjoint and the skeleton can build, instead of rejecting the input.
+// ---------------------------------------------------------------------------
+
+const SEP_OUTER = [[0, 0], [100, 0], [100, 100], [0, 100]];
+
+// Classify a build outcome without letting a WASM-level throw abort the runner.
+function buildOutcome(rings, opts) {
+  try {
+    return buildFromPolygon(rings, opts) ? 'ok' : 'null';
+  } catch {
+    return 'throw';
+  }
+}
+
+test('separateTouchingHoles nudges shared-vertex holes apart so the build succeeds', async () => {
+  await init();
+  // Two triangles meeting only at the point (40, 20).
+  const rings = [
+    SEP_OUTER,
+    [[20, 20], [40, 20], [30, 40]],
+    [[40, 20], [60, 20], [50, 40]],
+  ];
+  assert.throws(() => buildFromPolygon(rings), /touch at vertex \(40, 20\)/); // default rejects it
+  const sep = buildFromPolygon(rings, { separateTouchingHoles: true });
+  assert.ok(sep, 'expected the perturbation to make the holes disjoint');
+  assert.ok(sep.faces.length > 0);
+});
+
+test('separateTouchingHoles also separates a hole touching the outer boundary', async () => {
+  await init();
+  const rings = [
+    SEP_OUTER,
+    [[0, 0], [20, 5], [5, 20]], // shares the outer corner (0, 0)
+  ];
+  assert.throws(() => buildFromPolygon(rings));
+  assert.ok(buildFromPolygon(rings, { separateTouchingHoles: true }));
+});
+
+test('separateTouchingHoles does not address overlapping-area holes', async () => {
+  await init();
+  // Two holes whose areas overlap (no single shared vertex to move): there is
+  // nothing for the vertex nudge to separate, so this stays unbuildable.
+  const rings = [
+    SEP_OUTER,
+    [[20, 20], [50, 20], [50, 40], [20, 40]],
+    [[30, 40], [60, 40], [60, 60], [30, 60]],
+  ];
+  assert.equal(buildOutcome(rings, { separateTouchingHoles: true }), 'null');
+});
+
+test('separateTouchingHoles builds the real edge-case GeoJSON', async () => {
+  await init();
+  const geo = JSON.parse(readFileSync(new URL('../example/edgeCaseGeoJson.json', import.meta.url)));
+  // The file's defect is two holes sharing a vertex.
+  assert.throws(() => buildFromPolygon(geo.coordinates)); // default: detected + rejected
+  const sep = buildFromPolygon(geo.coordinates, { separateTouchingHoles: true });
+  assert.ok(sep, 'expected the perturbation to resolve the shared vertex');
+  assert.ok(sep.faces.length > 100);
 });

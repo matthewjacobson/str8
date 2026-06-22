@@ -3804,7 +3804,59 @@ function detectTouchingRings(cleaned) {
     }
   }
 }
-function flatten(rings, checkTouchingHoles) {
+function unit(x, y) {
+  const len = Math.hypot(x, y);
+  return len === 0 ? [0, 0] : [x / len, y / len];
+}
+function pointInRing(px, py, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    if (yi > py !== yj > py && px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+function nudgeVertexInward(ring, i) {
+  const n = ring.length;
+  const v = ring[i];
+  const p = ring[(i - 1 + n) % n];
+  const q = ring[(i + 1) % n];
+  const u = unit(p[0] - v[0], p[1] - v[1]);
+  const w = unit(q[0] - v[0], q[1] - v[1]);
+  let bx = u[0] + w[0];
+  let by = u[1] + w[1];
+  let blen = Math.hypot(bx, by);
+  if (blen < 1e-9) {
+    [bx, by] = [-u[1], u[0]];
+    blen = Math.hypot(bx, by) || 1;
+  }
+  bx /= blen;
+  by /= blen;
+  const e = Math.min(Math.hypot(p[0] - v[0], p[1] - v[1]), Math.hypot(q[0] - v[0], q[1] - v[1]));
+  const step = e * 0.01;
+  const sign = pointInRing(v[0] + bx * step, v[1] + by * step, ring) ? 1 : -1;
+  ring[i] = [v[0] + bx * step * sign, v[1] + by * step * sign];
+}
+function separateTouchingRings(cleaned) {
+  const byKey = /* @__PURE__ */ new Map();
+  cleaned.forEach(({ ring }, ci) => {
+    ring.forEach(([x, y], vi) => {
+      const key = `${x},${y}`;
+      (byKey.get(key) ?? byKey.set(key, []).get(key)).push({ ci, vi });
+    });
+  });
+  for (const refs of byKey.values()) {
+    if (new Set(refs.map((r) => r.ci)).size < 2) continue;
+    for (const { ci, vi } of refs) {
+      if (cleaned[ci].index === 0) continue;
+      nudgeVertexInward(cleaned[ci].ring, vi);
+    }
+  }
+}
+function flatten(rings, touch) {
   if (rings.length === 0) return null;
   const cleaned = [];
   rings.forEach((rawRing, index) => {
@@ -3813,7 +3865,8 @@ function flatten(rings, checkTouchingHoles) {
     cleaned.push({ ring, index });
   });
   if (cleaned.length === 0 || cleaned[0].index !== 0) return null;
-  if (checkTouchingHoles) detectTouchingRings(cleaned);
+  if (touch === "throw") detectTouchingRings(cleaned);
+  else if (touch === "separate") separateTouchingRings(cleaned);
   const coords = [];
   const sizes = [];
   for (const { ring, index } of cleaned) {
@@ -3836,7 +3889,8 @@ function ensureReady() {
 }
 function buildFromPolygon(rings, options = {}) {
   const m = ensureReady();
-  const flat = flatten(rings, true);
+  const touch = options.separateTouchingHoles ? "separate" : "throw";
+  const flat = flatten(rings, touch);
   if (!flat) return null;
   return m.buildInteriorSkeleton(flat.coords, flat.sizes, options.forceExact ?? false);
 }
@@ -3856,7 +3910,7 @@ function buildExteriorSkeleton(rings, options) {
   if (!(options.maxOffset > 0)) {
     throw new Error("str8: buildExteriorSkeleton requires options.maxOffset > 0.");
   }
-  const flat = flatten(rings, false);
+  const flat = flatten(rings, "ignore");
   if (!flat) return null;
   return m.buildExteriorSkeleton(flat.coords, flat.sizes, options.maxOffset, options.forceExact ?? false);
 }
@@ -3865,7 +3919,7 @@ function offsetPolygon(rings, distance, options = {}) {
   if (!(distance > 0)) {
     throw new Error("str8: offsetPolygon requires distance > 0.");
   }
-  const flat = flatten(rings, !(options.exterior ?? false));
+  const flat = flatten(rings, options.exterior ? "ignore" : "throw");
   if (!flat) return null;
   return m.offsetPolygons(
     flat.coords,
