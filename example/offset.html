@@ -62,7 +62,8 @@
     <header>
       <h1>str8 — offsets &amp; exterior skeletons</h1>
       <p>
-        Interior/exterior straight skeletons and offset (inset/outset) contours.
+        Offset (inset/outset) contours derived from the straight skeleton —
+        toggle <b>show skeleton</b> to overlay the skeleton they came from.
         Sample polygons from
         <a href="https://github.com/LingDong-/interesting-polygon-archive" target="_blank" rel="noopener"
           >interesting-polygon-archive</a
@@ -76,12 +77,11 @@
         <select id="mode">
           <option value="offset-in">Interior offset</option>
           <option value="offset-out">Exterior offset</option>
-          <option value="skel-in">Interior skeleton</option>
-          <option value="skel-out">Exterior skeleton</option>
         </select>
       </label>
       <label class="field" id="distField">Distance <input type="range" id="dist" min="2" max="200" step="1" value="35" /></label>
-      <label class="check" id="concField"><input type="checkbox" id="conc" checked /> concentric</label>
+      <label class="check"><input type="checkbox" id="conc" checked /> concentric</label>
+      <label class="check"><input type="checkbox" id="skel" /> show skeleton</label>
       <span id="info"></span>
       <span class="spacer"></span>
       <button class="zoom-btn wide" id="fit">Fit</button>
@@ -101,7 +101,7 @@
     </div>
 
     <script type="module">
-      import { init, buildFromPolygon, buildExteriorSkeleton, offsetPolygon } from '../dist/str8.js';
+      import { init, offsetPolygon } from '../dist/str8.js';
 
       const $ = (id) => document.getElementById(id);
       const canvas = $('c');
@@ -215,11 +215,10 @@
         for (const ring of rings) for (const [x, y] of ring) see(x, y);
         const span = Math.max(maxX - minX, maxY - minY) || 1;
 
-        const mode = $('mode').value;
-        const isOffset = mode === 'offset-in' || mode === 'offset-out';
-        const exterior = mode === 'offset-out' || mode === 'skel-out';
+        const exterior = $('mode').value === 'offset-out';
+        const showSkel = $('skel').checked;
         const step = (parseInt($('dist').value) / 1000) * span; // distance per ring
-        const concentric = $('conc').checked && isOffset;
+        const concentric = $('conc').checked;
 
         const contours = [];
         let skel = null;
@@ -234,29 +233,25 @@
           return list.length;
         };
 
-        let note = '';
-        if (isOffset) {
-          // One skeleton, every distance at once — far cheaper than a build per ring.
-          const count = concentric ? MAX_RINGS : 1;
-          const distances = Array.from({ length: count }, (_, k) => (k + 1) * step);
-          const res = offsetPolygon(rings, distances, { exterior });
-          let drawn = 0;
-          if (res) {
-            for (const set of res.contours) {
-              const n = addContours(set);
-              drawn += n;
-              if (!exterior && n === 0) break; // fully eroded — deeper insets are empty too
-            }
+        // One skeleton, every distance at once — far cheaper than a build per
+        // ring, and the call hands back the skeleton it derived the offsets from.
+        const count = concentric ? MAX_RINGS : 1;
+        const distances = Array.from({ length: count }, (_, k) => (k + 1) * step);
+        const res = offsetPolygon(rings, distances, { exterior });
+        let drawn = 0;
+        if (res) {
+          for (const set of res.contours) {
+            const n = addContours(set);
+            drawn += n;
+            if (!exterior && n === 0) break; // fully eroded — deeper insets are empty too
           }
-          note = `${exterior ? 'outset' : 'inset'} · step <b>${step.toFixed(1)}</b> · <b>${drawn}</b> contour${drawn === 1 ? '' : 's'}`;
-        } else if (mode === 'skel-in') {
-          skel = buildFromPolygon(rings);
-          note = skel ? `interior skeleton · <b>${skel.faces.length}</b> faces` : 'skeleton failed';
-        } else {
-          skel = buildExteriorSkeleton(rings, { maxOffset: step });
-          if (skel) for (let i = 0; i < skel.vertices.length; i += 3) see(skel.vertices[i], skel.vertices[i + 1]);
-          note = skel ? `exterior skeleton · frame +${step.toFixed(1)} · <b>${skel.faces.length}</b> faces` : 'skeleton failed';
+          if (showSkel) {
+            skel = res.skeleton; // the interior/exterior skeleton, for free
+            for (let i = 0; i < skel.vertices.length; i += 3) see(skel.vertices[i], skel.vertices[i + 1]);
+          }
         }
+        let note = `${exterior ? 'outset' : 'inset'} · step <b>${step.toFixed(1)}</b> · <b>${drawn}</b> contour${drawn === 1 ? '' : 's'}`;
+        if (skel) note += ` · skeleton <b>${skel.faces.length}</b> faces`;
 
         const verts = rings.reduce((a, r) => a + r.length, 0);
         scene = { rings, contours, skel, bounds: { minX, minY, maxX, maxY } };
@@ -281,20 +276,12 @@
         })
         .catch((e) => setInfo(`failed to load: ${e.message}`, true));
 
-      function refreshControls() {
-        const isOffset = $('mode').value.startsWith('offset');
-        $('concField').style.display = isOffset ? '' : 'none';
-        $('distField').firstChild.textContent =
-          $('mode').value === 'skel-in' ? 'Distance ' : ($('mode').value === 'skel-out' ? 'Frame ' : 'Distance ');
-        $('distField').style.opacity = $('mode').value === 'skel-in' ? 0.4 : 1;
-      }
-
       // ---- events ---------------------------------------------------------
       $('picker').addEventListener('change', () => { viewDirty = false; compute(); });
-      $('mode').addEventListener('change', () => { refreshControls(); viewDirty = false; compute(); });
+      $('mode').addEventListener('change', () => { viewDirty = false; compute(); });
       $('dist').addEventListener('input', compute);
       $('conc').addEventListener('change', compute);
-      refreshControls();
+      $('skel').addEventListener('change', compute);
 
       function pointerPos(e) { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
       function zoomAt(mx, my, f) {

@@ -70,6 +70,7 @@
       #status { font-size: 13px; min-height: 20px; flex: none; }
       #status.err { color: #f85149; }
       #status.ok { color: #3fb950; }
+      #status.warn { color: #d29922; }
 
       .canvas-wrap {
         position: relative;
@@ -147,6 +148,7 @@
           <button id="run">Compute skeleton</button>
           <select id="sample"><option value="">Load sample…</option></select>
           <label class="check"><input type="checkbox" id="invertY" /> flip Y (screen coords)</label>
+          <label class="check"><input type="checkbox" id="separate" /> separate touching holes</label>
         </div>
         <div id="status"></div>
       </div>
@@ -341,6 +343,7 @@
         }
 
         cam.ySign = $('invertY').checked ? 1 : -1;
+        const separate = $('separate').checked;
 
         const results = [];
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -350,9 +353,17 @@
             if (x < minX) minX = x; if (y < minY) minY = y;
             if (x > maxX) maxX = x; if (y > maxY) maxY = y;
           }
-          const skel = buildFromPolygon(rings);
+          // With separation off, touching holes throw a descriptive error;
+          // catch it per-polygon so one bad polygon doesn't abort the rest and
+          // we can surface the reason in the UI.
+          let skel = null, touch = null;
+          try {
+            skel = buildFromPolygon(rings, { separateTouchingHoles: separate });
+          } catch (e) {
+            touch = e.message || String(e);
+          }
           if (skel) okCount++;
-          results.push({ rings, skel });
+          results.push({ rings, skel, touch });
         }
 
         if (!isFinite(minX)) { setStatus('Polygon had no coordinates.', 'err'); return; }
@@ -368,12 +379,25 @@
         fitView();
         draw();
 
-        const failed = results.length - okCount;
-        setStatus(
-          `${okCount}/${results.length} polygon(s) skeletonized` +
-            (failed ? ` — ${failed} failed (self-intersecting or invalid?)` : '') + `.`,
-          failed ? 'err' : 'ok',
-        );
+        // Polygons rejected for touching holes report a descriptive error; keep
+        // those distinct from CGAL returning null on other invalid geometry.
+        const touched = results.filter((r) => r.touch);
+        const nullFails = results.filter((r) => !r.skel && !r.touch).length;
+
+        let msg = `${okCount}/${results.length} polygon(s) skeletonized`;
+        const extras = [];
+        let kind = okCount === results.length ? 'ok' : 'err';
+        if (nullFails) extras.push(`${nullFails} failed (self-intersecting or invalid?)`);
+        if (touched.length) {
+          // e.g. "hole 1 and hole 2 touch at vertex (7273, 7314.5)"
+          const where = touched[0].touch.replace(/^str8:\s*/, '').split(';')[0];
+          extras.push(
+            `${touched.length} with touching holes (${where}) — enable “separate touching holes” to build`,
+          );
+          kind = 'warn';
+        }
+        if (extras.length) msg += ' — ' + extras.join('; ');
+        setStatus(msg + '.', kind);
       }
 
       // ---- Interaction: zoom + pan ---------------------------------------
@@ -433,6 +457,7 @@
 
       $('run').addEventListener('click', compute);
       $('invertY').addEventListener('change', compute);
+      $('separate').addEventListener('change', compute);
 
       // The "Load sample" dropdown is populated from the bundled example
       // polygons (shared with the gallery demo). Picking one drops it into the

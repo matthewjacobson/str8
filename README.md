@@ -247,9 +247,10 @@ Static demos live in `example/` — serve the repo root over HTTP (e.g.
   polygons lifted into roofs where each vertex's height is its wavefront
   `time`, rendered with [three.js](https://threejs.org/) (orbit, adjustable
   pitch). three.js is loaded from a CDN, so this page needs network access.
-- `example/offset.html` — **offsets & exterior skeletons**: inset/outset
-  offset contours (with concentric stepping) and interior/exterior straight
-  skeletons, driven by a distance slider, with pan/zoom.
+- `example/offset.html` — **offsets**: interior/exterior inset/outset offset
+  contours (with concentric stepping), driven by a distance slider, with a
+  "show skeleton" toggle that overlays the skeleton the offsets were derived
+  from, and pan/zoom.
 - `example/pathfind.html` — **central paths**: drag two points and route a
   path between them through the polygon's center along the skeleton, with a
   direct↔central dial and smoothing. Like the region demo, this consumes the
