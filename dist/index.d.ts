@@ -39,6 +39,8 @@ export declare function isReady(): boolean;
  * @param rings   Outer ring first, then holes. See {@link Rings}.
  * @param options Optional build flags. See {@link BuildOptions}.
  * @returns The skeleton, or `null` if the input is degenerate or CGAL fails.
+ * @throws If two rings touch (a hole touching another hole or the outer
+ *   boundary), since CGAL requires the holes to be pairwise disjoint.
  */
 export declare function buildFromPolygon(rings: Rings, options?: BuildOptions): Skeleton | null;
 /**

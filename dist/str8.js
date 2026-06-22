@@ -3761,13 +3761,62 @@ function open(ring) {
   }
   return ring;
 }
-function flatten(rings) {
+var COLLINEAR_EPS = 1e-6;
+function lineDistance(p, a, c) {
+  const dx = c[0] - a[0];
+  const dy = c[1] - a[1];
+  const len = Math.hypot(dx, dy);
+  if (len === 0) return Math.hypot(p[0] - a[0], p[1] - a[1]);
+  return Math.abs((p[0] - a[0]) * dy - (p[1] - a[1]) * dx) / len;
+}
+function dropCollinearVertices(ring) {
+  let out = ring;
+  let changed = true;
+  while (changed && out.length > 3) {
+    changed = false;
+    for (let i = 0; i < out.length; i++) {
+      const prev = out[(i - 1 + out.length) % out.length];
+      const next = out[(i + 1) % out.length];
+      if (lineDistance(out[i], prev, next) < COLLINEAR_EPS) {
+        out = out.slice(0, i).concat(out.slice(i + 1));
+        changed = true;
+        break;
+      }
+    }
+  }
+  return out;
+}
+function ringName(index) {
+  return index === 0 ? "the outer boundary" : `hole ${index}`;
+}
+function detectTouchingRings(cleaned) {
+  const seen = /* @__PURE__ */ new Map();
+  for (const { ring, index } of cleaned) {
+    for (const [x, y] of ring) {
+      const key = `${x},${y}`;
+      const prev = seen.get(key);
+      if (prev !== void 0 && prev !== index) {
+        throw new Error(
+          `str8: ${ringName(prev)} and ${ringName(index)} touch at vertex (${x}, ${y}); rings must be pairwise disjoint \u2014 holes may not touch each other or the outer boundary.`
+        );
+      }
+      if (prev === void 0) seen.set(key, index);
+    }
+  }
+}
+function flatten(rings, checkTouchingHoles) {
   if (rings.length === 0) return null;
+  const cleaned = [];
+  rings.forEach((rawRing, index) => {
+    const ring = dropCollinearVertices(open(rawRing));
+    if (ring.length < 3) return;
+    cleaned.push({ ring, index });
+  });
+  if (cleaned.length === 0 || cleaned[0].index !== 0) return null;
+  if (checkTouchingHoles) detectTouchingRings(cleaned);
   const coords = [];
   const sizes = [];
-  rings.forEach((rawRing, index) => {
-    const ring = open(rawRing);
-    if (ring.length < 3) return;
+  for (const { ring, index } of cleaned) {
     const isOuter = index === 0;
     const ccw = signedArea2(ring) > 0;
     const reverse = isOuter ? !ccw : ccw;
@@ -3776,8 +3825,7 @@ function flatten(rings) {
       coords.push(x, y);
     }
     sizes.push(ordered.length);
-  });
-  if (sizes.length === 0 || sizes[0] < 3) return null;
+  }
   return { coords, sizes };
 }
 function ensureReady() {
@@ -3788,7 +3836,7 @@ function ensureReady() {
 }
 function buildFromPolygon(rings, options = {}) {
   const m = ensureReady();
-  const flat = flatten(rings);
+  const flat = flatten(rings, true);
   if (!flat) return null;
   return m.buildInteriorSkeleton(flat.coords, flat.sizes, options.forceExact ?? false);
 }
@@ -3808,7 +3856,7 @@ function buildExteriorSkeleton(rings, options) {
   if (!(options.maxOffset > 0)) {
     throw new Error("str8: buildExteriorSkeleton requires options.maxOffset > 0.");
   }
-  const flat = flatten(rings);
+  const flat = flatten(rings, false);
   if (!flat) return null;
   return m.buildExteriorSkeleton(flat.coords, flat.sizes, options.maxOffset, options.forceExact ?? false);
 }
@@ -3817,7 +3865,7 @@ function offsetPolygon(rings, distance, options = {}) {
   if (!(distance > 0)) {
     throw new Error("str8: offsetPolygon requires distance > 0.");
   }
-  const flat = flatten(rings);
+  const flat = flatten(rings, !(options.exterior ?? false));
   if (!flat) return null;
   return m.offsetPolygons(
     flat.coords,

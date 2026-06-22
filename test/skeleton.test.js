@@ -146,6 +146,46 @@ test('degenerate input returns null', async () => {
   assert.equal(buildFromPolygon([[[0, 0], [1, 1]]]), null); // < 3 vertices
 });
 
+// A near-collinear (~180°) vertex — here a midpoint nudged by float noise off
+// an axis-aligned edge — has an ill-defined bisector and breaks CGAL. flatten()
+// must drop it so the build still succeeds.
+test('near-collinear vertices are sanitized away', async () => {
+  await init();
+  const bad = buildFromPolygon([
+    [
+      [0, 0],
+      [100, 0],
+      [100.000000001, 50], // nudged just off the 100,0 -> 100,100 edge
+      [100, 100],
+      [0, 100],
+    ],
+  ]);
+  assert.ok(bad, 'expected the near-collinear vertex to be dropped and the build to succeed');
+  // Same skeleton as the clean square: 4 corners + 1 center.
+  assert.equal(bad.vertices.length / 3, 5);
+  assert.equal(bad.faces.length, 4);
+});
+
+// Holes must be pairwise disjoint; two holes sharing a vertex form an invalid
+// arrangement that fails opaquely inside CGAL. flatten() detects it and throws
+// a descriptive error naming the offending rings.
+test('touching holes throw with a descriptive error', async () => {
+  await init();
+  const rings = [
+    [[0, 0], [100, 0], [100, 100], [0, 100]],
+    [[20, 20], [40, 20], [30, 40]], // shares vertex (40, 20) with the next hole
+    [[40, 20], [60, 20], [50, 40]],
+  ];
+  assert.throws(() => buildFromPolygon(rings), /hole 1 and hole 2 touch at vertex \(40, 20\)/);
+
+  // A hole sharing a vertex with the outer boundary is reported too.
+  const onBoundary = [
+    [[0, 0], [100, 0], [100, 100], [0, 100]],
+    [[0, 0], [20, 5], [5, 20]], // shares the outer corner (0, 0)
+  ];
+  assert.throws(() => buildFromPolygon(onBoundary), /the outer boundary and hole 1 touch/);
+});
+
 test('buildFromGeoJSON handles Polygon and MultiPolygon', async () => {
   await init();
   const poly = buildFromGeoJSON({

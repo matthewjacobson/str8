@@ -88,19 +88,113 @@ function open(ring: Point[]): Point[] {
 }
 
 /**
- * Normalize one polygon's rings into the flat buffers the WASM core expects:
- * open rings, outer counter-clockwise, holes clockwise.
+ * Largest perpendicular distance below which a vertex is treated as lying on
+ * the line through its neighbours. Real polygon features sit far above this;
+ * the targets are float-noise artifacts (e.g. an axis-aligned edge whose
+ * midpoint reads `7511.999999999998` instead of `7512`), which are ~1e-12 off.
  */
-function flatten(rings: Rings): { coords: number[]; sizes: number[] } | null {
+const COLLINEAR_EPS = 1e-6;
+
+/** Perpendicular distance from `p` to the infinite line through `a` and `c`. */
+function lineDistance(p: Point, a: Point, c: Point): number {
+  const dx = c[0] - a[0];
+  const dy = c[1] - a[1];
+  const len = Math.hypot(dx, dy);
+  if (len === 0) return Math.hypot(p[0] - a[0], p[1] - a[1]);
+  return Math.abs((p[0] - a[0]) * dy - (p[1] - a[1]) * dx) / len;
+}
+
+/**
+ * Drop near-collinear (≈180°) vertices from an open ring. Such vertices have
+ * an ill-defined angle bisector, which destabilizes CGAL's straight-skeleton
+ * event scheduling and makes the build fail outright. Removing them is exact
+ * for a truly collinear point and a sub-`COLLINEAR_EPS` nudge otherwise.
+ *
+ * Iterates until stable, since removing one vertex can leave a neighbour
+ * collinear. Never drops below a triangle (degenerate rings are caught later).
+ */
+function dropCollinearVertices(ring: Point[]): Point[] {
+  let out = ring;
+  let changed = true;
+  while (changed && out.length > 3) {
+    changed = false;
+    for (let i = 0; i < out.length; i++) {
+      const prev = out[(i - 1 + out.length) % out.length];
+      const next = out[(i + 1) % out.length];
+      if (lineDistance(out[i], prev, next) < COLLINEAR_EPS) {
+        out = out.slice(0, i).concat(out.slice(i + 1));
+        changed = true;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/** Human label for a ring in diagnostics: index 0 is the outer boundary. */
+function ringName(index: number): string {
+  return index === 0 ? 'the outer boundary' : `hole ${index}`;
+}
+
+/**
+ * Fail early on touching rings. CGAL's `Straight_skeleton_2` requires the holes
+ * of a polygon to be pairwise disjoint and not touch the outer boundary; two
+ * rings meeting even at a single point form an invalid (non-simple) arrangement
+ * that fails opaquely deep inside CGAL. The common case is a shared vertex
+ * (e.g. a shape sliced into pieces that reuse boundary coordinates), which this
+ * catches by exact coincidence. `cleaned` carries each ring's original input
+ * index so the message points at the right ring.
+ */
+function detectTouchingRings(cleaned: { ring: Point[]; index: number }[]): void {
+  const seen = new Map<string, number>(); // "x,y" -> original ring index
+  for (const { ring, index } of cleaned) {
+    for (const [x, y] of ring) {
+      const key = `${x},${y}`;
+      const prev = seen.get(key);
+      if (prev !== undefined && prev !== index) {
+        throw new Error(
+          `str8: ${ringName(prev)} and ${ringName(index)} touch at vertex ` +
+            `(${x}, ${y}); rings must be pairwise disjoint — holes may not touch ` +
+            `each other or the outer boundary.`,
+        );
+      }
+      if (prev === undefined) seen.set(key, index);
+    }
+  }
+}
+
+/**
+ * Normalize one polygon's rings into the flat buffers the WASM core expects:
+ * open rings, near-collinear vertices dropped, outer counter-clockwise, holes
+ * clockwise.
+ *
+ * @param checkTouchingHoles When true, throw if any two rings touch (see
+ *   {@link detectTouchingRings}). Pass false where holes are ignored anyway
+ *   (the exterior skeleton/offset), so irrelevant holes can't fail the build.
+ */
+function flatten(
+  rings: Rings,
+  checkTouchingHoles: boolean,
+): { coords: number[]; sizes: number[] } | null {
   if (rings.length === 0) return null;
+
+  // Open + sanitize each ring up front, keeping its original index so any
+  // touching-ring diagnostic refers to the caller's layout.
+  const cleaned: { ring: Point[]; index: number }[] = [];
+  rings.forEach((rawRing, index) => {
+    const ring = dropCollinearVertices(open(rawRing));
+    if (ring.length < 3) return; // degenerate ring (incl. a collapsed outer)
+    cleaned.push({ ring, index });
+  });
+
+  // Need a usable outer boundary as the first ring.
+  if (cleaned.length === 0 || cleaned[0].index !== 0) return null;
+
+  if (checkTouchingHoles) detectTouchingRings(cleaned);
 
   const coords: number[] = [];
   const sizes: number[] = [];
-
-  rings.forEach((rawRing, index) => {
-    const ring = open(rawRing);
-    if (ring.length < 3) return;
-
+  for (const { ring, index } of cleaned) {
     const isOuter = index === 0;
     const ccw = signedArea2(ring) > 0;
     // Outer must be CCW, holes must be CW.
@@ -111,9 +205,8 @@ function flatten(rings: Rings): { coords: number[]; sizes: number[] } | null {
       coords.push(x, y);
     }
     sizes.push(ordered.length);
-  });
+  }
 
-  if (sizes.length === 0 || sizes[0] < 3) return null;
   return { coords, sizes };
 }
 
@@ -134,10 +227,12 @@ function ensureReady(): SkeletonModule {
  * @param rings   Outer ring first, then holes. See {@link Rings}.
  * @param options Optional build flags. See {@link BuildOptions}.
  * @returns The skeleton, or `null` if the input is degenerate or CGAL fails.
+ * @throws If two rings touch (a hole touching another hole or the outer
+ *   boundary), since CGAL requires the holes to be pairwise disjoint.
  */
 export function buildFromPolygon(rings: Rings, options: BuildOptions = {}): Skeleton | null {
   const m = ensureReady();
-  const flat = flatten(rings);
+  const flat = flatten(rings, true);
   if (!flat) return null;
   return m.buildInteriorSkeleton(flat.coords, flat.sizes, options.forceExact ?? false);
 }
@@ -187,7 +282,9 @@ export function buildExteriorSkeleton(rings: Rings, options: ExteriorSkeletonOpt
   if (!(options.maxOffset > 0)) {
     throw new Error('str8: buildExteriorSkeleton requires options.maxOffset > 0.');
   }
-  const flat = flatten(rings);
+  // The exterior skeleton uses only the outer boundary, so touching holes are
+  // irrelevant here and must not fail the build.
+  const flat = flatten(rings, false);
   if (!flat) return null;
   return m.buildExteriorSkeleton(flat.coords, flat.sizes, options.maxOffset, options.forceExact ?? false);
 }
@@ -225,7 +322,9 @@ export function offsetPolygon(
   if (!(distance > 0)) {
     throw new Error('str8: offsetPolygon requires distance > 0.');
   }
-  const flat = flatten(rings);
+  // An interior offset consumes the holes (so touching holes are invalid); an
+  // exterior offset only uses the outer boundary, so holes are irrelevant.
+  const flat = flatten(rings, !(options.exterior ?? false));
   if (!flat) return null;
   return m.offsetPolygons(
     flat.coords,

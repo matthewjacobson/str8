@@ -1,6 +1,6 @@
 {
   "name": "@matthewjacobson/str8",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Modern straight-skeleton computation in the browser and Node, powered by CGAL + WebAssembly.",
   "type": "module",
   "license": "MIT",

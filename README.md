@@ -102,8 +102,58 @@ All builders accept `{ forceExact: true }` to skip the fast kernel (see below).
 - **Winding order is normalized automatically** — outer ring forced CCW, holes
   CW. You don't have to pre-orient your data.
 - **Open or closed rings both work** — a duplicated closing vertex is dropped.
+- **Near-collinear vertices are dropped** — see below.
 - Degenerate input (fewer than 3 vertices, empty) returns `null` instead of
   aborting the WASM module.
+
+### Near-collinear vertices
+
+A vertex that sits almost exactly on the straight line through its two
+neighbours (an interior angle of ≈180°) has an effectively undefined angle
+bisector. The straight skeleton is built by advancing each vertex along that
+bisector, so such a vertex derails CGAL's event scheduling and the build fails
+outright — returning `null` even though the polygon looks fine.
+
+These vertices are common in real data: an axis-aligned edge whose midpoint
+reads `7511.999999999998` instead of `7512` (floating-point noise of ~1e-12)
+introduces an almost-straight corner. str8 removes them up front — any vertex
+whose perpendicular distance to the line through its neighbours is below a small
+epsilon (`1e-6`) is dropped before the geometry reaches CGAL. Genuine polygon
+features sit far above this threshold, so only redundant near-straight points
+are removed. This runs on every build path.
+
+### Validation: touching rings
+
+CGAL's `Straight_skeleton_2` requires a polygon's holes to be **pairwise
+disjoint** and to not touch the outer boundary. Rings that meet — even at a
+single point — form a non-simple arrangement that fails deep inside CGAL with no
+useful diagnostic.
+
+str8 checks for this before building and **throws** a descriptive error naming
+the offending rings and the shared point, rather than returning a bare `null`:
+
+```
+str8: hole 4 and hole 5 touch at vertex (7273, 7314.5); rings must be pairwise
+disjoint — holes may not touch each other or the outer boundary.
+```
+
+The check runs for interior builds (`buildFromPolygon`, `buildFromGeoJSON`, and
+interior `offsetPolygon`). It is skipped for the exterior skeleton and exterior
+offset, which use only the outer boundary, so holes there are irrelevant.
+
+**Limitation — only coincident vertices are detected.** The check flags two
+rings that share an identical vertex, which is by far the most common cause (for
+example, a shape sliced into pieces that reuse boundary coordinates). It does
+**not** detect:
+
+- **vertex-on-edge** touches — a vertex of one ring lying partway along an edge
+  of another, without being one of that edge's endpoints, and
+- **overlapping-edge** touches — two rings that share a length of edge rather
+  than a single point.
+
+These cases will still reach CGAL and typically surface as a `null` result.
+Detecting them reliably requires an `O(V·E)` edge-intersection pass, which str8
+does not currently perform.
 
 ### Robustness: automatic exact fallback
 
