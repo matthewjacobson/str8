@@ -109,7 +109,7 @@
       const info = $('info');
       const setInfo = (h, err) => { info.innerHTML = h; info.className = err ? 'err' : ''; };
 
-      const MAX_RINGS = 8; // cap concentric offset rings (each is a skeleton build)
+      const MAX_RINGS = 8; // how many concentric offset rings to request at once
 
       // ---- camera (world -> screen, CSS px; y down) ----------------------
       let scene = null;
@@ -236,13 +236,17 @@
 
         let note = '';
         if (isOffset) {
-          const rings_ = concentric ? MAX_RINGS : 1;
+          // One skeleton, every distance at once — far cheaper than a build per ring.
+          const count = concentric ? MAX_RINGS : 1;
+          const distances = Array.from({ length: count }, (_, k) => (k + 1) * step);
+          const res = offsetPolygon(rings, distances, { exterior });
           let drawn = 0;
-          for (let k = 1; k <= rings_; k++) {
-            const list = offsetPolygon(rings, k * step, { exterior });
-            const n = addContours(list);
-            drawn += n;
-            if (!exterior && n === 0) break; // fully eroded — stop insetting
+          if (res) {
+            for (const set of res.contours) {
+              const n = addContours(set);
+              drawn += n;
+              if (!exterior && n === 0) break; // fully eroded — deeper insets are empty too
+            }
           }
           note = `${exterior ? 'outset' : 'inset'} · step <b>${step.toFixed(1)}</b> · <b>${drawn}</b> contour${drawn === 1 ? '' : 's'}`;
         } else if (mode === 'skel-in') {
